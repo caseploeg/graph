@@ -40,6 +40,8 @@ class GeneratedQuestion:
     expected_search_strategy: str
     seed_node: int
     context_nodes: list[int]
+    context_quality: str = "unknown"
+    context_quality_reasoning: str = ""
 
 
 RELATIONSHIP_TYPES_TO_FOLLOW = frozenset(
@@ -663,7 +665,38 @@ You are shown a subsection of a larger codebase. First, review the graph structu
 {source_context}
 </source_code>
 
-Your task: Generate a challenging question that a typical developer would ask about this codebase.
+## STEP 1: Assess Context Quality
+
+Before writing a question, evaluate the quality of the context you've been given.
+
+**EXCELLENT context has:**
+- Multiple source files involved (3+)
+- Deep call chains visible (seed → A → B → C)
+- Both upstream (callers) and downstream (callees) relationships
+- Substantial implementation code (not just test assertions)
+- Error handling, edge cases, or complex logic visible
+
+**GOOD context has:**
+- At least 2 files involved
+- Some relationship depth (at least 2 levels)
+- Mix of implementation and usage
+
+**POOR context has:**
+- Only 1-2 small code chunks
+- Seed function is trivial (< 5 lines)
+- Mostly test code without implementation details
+- No meaningful relationships visible
+- Only shows leaf functions with no callees
+
+**Calibration examples:**
+- A 100-line function that calls 5+ other functions across 3 files = EXCELLENT
+- A 3-line method that just raises an exception = POOR
+- Test functions showing assertions but not the code being tested = POOR
+- Core processing function with type conversion, validation, error handling = EXCELLENT
+
+## STEP 2: Generate Question (or Skip)
+
+If context is POOR, you should indicate this rather than forcing a low-quality question.
 
 IMPORTANT CONSTRAINTS:
 - The agent being tested starts with ONLY access to the root directory
@@ -699,7 +732,9 @@ GOOD EXAMPLES (require investigation):
 
 OUTPUT FORMAT (respond with valid JSON only):
 {{
-  "question": "<the question a developer would naturally ask>",
+  "context_quality": "excellent|good|poor",
+  "context_quality_reasoning": "<brief explanation of why you rated the context this way>",
+  "question": "<the question a developer would naturally ask, or null if context is poor>",
   "difficulty": "hard",
   "reasoning": "<why this requires multi-step search - what files/concepts must be connected>",
   "expected_search_strategy": "<step-by-step how an expert would find the answer using grep/glob/read>"
@@ -784,12 +819,14 @@ def generate_question(
 
     question = GeneratedQuestion(
         repo=repo_name,
-        question=parsed.get("question", ""),
+        question=parsed.get("question") or "",
         difficulty=parsed.get("difficulty", "hard"),
         reasoning=parsed.get("reasoning", ""),
         expected_search_strategy=parsed.get("expected_search_strategy", ""),
         seed_node=seed.node_id,
         context_nodes=list(context_nodes),
+        context_quality=parsed.get("context_quality", "unknown"),
+        context_quality_reasoning=parsed.get("context_quality_reasoning", ""),
     )
     return question, seed.node_id
 
