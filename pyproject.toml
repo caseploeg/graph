@@ -60,6 +60,10 @@ semantic = [
     "transformers>=4.0.0",
 ]
 
+gcs = [
+    "google-cloud-storage>=2.0.0",
+]
+
 [tool.ruff]
 line-length = 88
 target-version = "py312"

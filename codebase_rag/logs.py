@@ -71,6 +71,14 @@ PROTOBUF_INVALID_REL = (
 PROTOBUF_FLUSH_SUCCESS = "Successfully flushed {nodes} unique nodes and {rels} unique relationships to {path}"
 PROTOBUF_FLUSHING = "Flushing data to {path}..."
 
+# (H) JSON service logs
+JSON_INIT = "JsonFileIngestor initialized to write to: {path}"
+JSON_FLUSHING = "Flushing graph data to {path}..."
+JSON_FLUSH_SUCCESS = (
+    "Successfully wrote {nodes} nodes and {rels} relationships to {path}"
+)
+JSON_SKIPPING_REL = "Skipping unresolved relationship: {from_key} -> {to_key}"
+
 # (H) Parser loader logs
 BUILDING_BINDINGS = "Building Python bindings for {lang}..."
 BUILD_FAILED = "Failed to build {lang} bindings: stdout={stdout}, stderr={stderr}"

@@ -1,6 +1,9 @@
 from typing import Protocol, runtime_checkable
 
 from ..types_defs import PropertyDict, PropertyValue, ResultRow
+from .json_service import JsonFileIngestor
+
+__all__ = ["IngestorProtocol", "QueryProtocol", "JsonFileIngestor"]
 
 
 @runtime_checkable

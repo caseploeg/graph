@@ -184,6 +184,9 @@ PROTOBUF_INDEX_FILE = "index.bin"
 PROTOBUF_NODES_FILE = "nodes.bin"
 PROTOBUF_RELS_FILE = "relationships.bin"
 
+# (H) JSON export defaults
+JSON_DEFAULT_EXTENSION = ".json"
+
 # (H) Protobuf oneof field names
 ONEOF_PROJECT = "project"
 ONEOF_PACKAGE = "package"
@@ -217,6 +220,10 @@ CLI_MSG_APP_TERMINATED = "\nApplication terminated by user."
 CLI_MSG_INDEXING_AT = "Indexing codebase at: {path}"
 CLI_MSG_OUTPUT_TO = "Output will be written to: {path}"
 CLI_MSG_INDEXING_DONE = "Indexing process completed successfully!"
+CLI_MSG_EXPORT_JSON_START = "Parsing repository to JSON: {path}"
+CLI_MSG_EXPORT_JSON_OUTPUT = "Output JSON: {path}"
+CLI_MSG_EXPORT_JSON_DONE = "JSON export completed successfully!"
+CLI_ERR_EXPORT_JSON = "An error occurred during JSON export: {error}"
 CLI_MSG_CONNECTING_MEMGRAPH = "Connecting to Memgraph to export graph..."
 CLI_MSG_EXPORTING_DATA = "Exporting graph data..."
 CLI_MSG_OPTIMIZATION_TERMINATED = "\nOptimization session terminated by user."

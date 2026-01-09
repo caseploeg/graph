@@ -5,6 +5,7 @@ class CLICommandName(StrEnum):
     START = "start"
     INDEX = "index"
     EXPORT = "export"
+    EXPORT_JSON = "export-json"
     OPTIMIZE = "optimize"
     MCP_SERVER = "mcp-server"
     GRAPH_LOADER = "graph-loader"
@@ -20,6 +21,7 @@ APP_DESCRIPTION = (
 CMD_START = "Start interactive chat session with your codebase"
 CMD_INDEX = "Index codebase to protobuf files for offline use"
 CMD_EXPORT = "Export knowledge graph from Memgraph to JSON file"
+CMD_EXPORT_JSON = "Parse repository directly to JSON graph (no Memgraph required)"
 CMD_OPTIMIZE = "AI-guided codebase optimization session"
 CMD_MCP_SERVER = "Start the MCP server for Claude Code integration"
 CMD_GRAPH_LOADER = "Load and display summary of exported graph JSON"
@@ -56,6 +58,7 @@ HELP_OUTPUT_PATH = "Output file path for the exported graph"
 HELP_OUTPUT_PROTO_DIR = (
     "Required. Path to the output directory for the protobuf index file(s)."
 )
+HELP_OUTPUT_JSON = "Required. Path to output JSON file for the graph."
 HELP_SPLIT_INDEX = "Write index to separate nodes.bin and relationships.bin files."
 HELP_FORMAT_JSON = "Export in JSON format"
 HELP_LANGUAGE_ARG = (
@@ -83,6 +86,7 @@ CLI_COMMANDS: dict[CLICommandName, str] = {
     CLICommandName.START: CMD_START,
     CLICommandName.INDEX: CMD_INDEX,
     CLICommandName.EXPORT: CMD_EXPORT,
+    CLICommandName.EXPORT_JSON: CMD_EXPORT_JSON,
     CLICommandName.OPTIMIZE: CMD_OPTIMIZE,
     CLICommandName.MCP_SERVER: CMD_MCP_SERVER,
     CLICommandName.GRAPH_LOADER: CMD_GRAPH_LOADER,

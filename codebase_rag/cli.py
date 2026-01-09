@@ -20,6 +20,7 @@ from .main import (
     update_model_settings,
 )
 from .parser_loader import load_parsers
+from .services import JsonFileIngestor
 from .services.protobuf_service import ProtobufFileIngestor
 from .tools.language import cli as language_cli
 
@@ -210,6 +211,63 @@ def index(
     except Exception as e:
         app_context.console.print(
             style(cs.CLI_ERR_INDEXING.format(error=e), cs.Color.RED)
+        )
+        logger.exception(ls.INDEXING_FAILED)
+        raise typer.Exit(1) from e
+
+
+@app.command(name=ch.CLICommandName.EXPORT_JSON, help=ch.CMD_EXPORT_JSON)
+def export_json(
+    repo_path: str | None = typer.Option(
+        None, "--repo-path", help=ch.HELP_REPO_PATH_INDEX
+    ),
+    output: str = typer.Option(
+        ...,
+        "-o",
+        "--output",
+        help=ch.HELP_OUTPUT_JSON,
+    ),
+    exclude: list[str] | None = typer.Option(
+        None,
+        "--exclude",
+        help=ch.HELP_EXCLUDE_PATTERNS,
+    ),
+    interactive_setup: bool = typer.Option(
+        False,
+        "--interactive-setup",
+        help=ch.HELP_INTERACTIVE_SETUP,
+    ),
+) -> None:
+    target_repo_path = repo_path or settings.TARGET_REPO_PATH
+    repo_to_export = Path(target_repo_path)
+
+    app_context.console.print(
+        style(cs.CLI_MSG_EXPORT_JSON_START.format(path=repo_to_export), cs.Color.GREEN)
+    )
+    app_context.console.print(
+        style(cs.CLI_MSG_EXPORT_JSON_OUTPUT.format(path=output), cs.Color.CYAN)
+    )
+
+    exclude_paths = frozenset(exclude) if exclude else None
+    include_paths: frozenset[str] | None = None
+    if interactive_setup:
+        include_paths = prompt_for_included_directories(repo_to_export, exclude)
+    else:
+        app_context.console.print(style(cs.CLI_MSG_AUTO_EXCLUDE, cs.Color.YELLOW))
+
+    try:
+        ingestor = JsonFileIngestor(output_path=output)
+        parsers, queries = load_parsers()
+        updater = GraphUpdater(
+            ingestor, repo_to_export, parsers, queries, include_paths, exclude_paths
+        )
+
+        updater.run()
+
+        app_context.console.print(style(cs.CLI_MSG_EXPORT_JSON_DONE, cs.Color.GREEN))
+    except Exception as e:
+        app_context.console.print(
+            style(cs.CLI_ERR_EXPORT_JSON.format(error=e), cs.Color.RED)
         )
         logger.exception(ls.INDEXING_FAILED)
         raise typer.Exit(1) from e
