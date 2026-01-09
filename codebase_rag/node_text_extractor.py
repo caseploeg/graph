@@ -319,6 +319,58 @@ def get_node_chunks(
     return output
 
 
+def read_node_ids_from_file(file_path: str | Path) -> list[int]:
+    path = Path(file_path)
+    node_ids: list[int] = []
+    for line in path.read_text(encoding=cs.ENCODING_UTF8).splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        node_ids.append(int(stripped))
+    return node_ids
+
+
+def _result_to_jsonl_dict(result: NodeTextResult) -> dict[str, str | int | None]:
+    return {
+        "node_id": result.node_id,
+        "text": result.code_chunk,
+        "qualified_name": result.qualified_name,
+        "file_path": str(result.file_path) if result.file_path else None,
+        "start_line": result.start_line,
+        "end_line": result.end_line,
+        "error": result.error,
+    }
+
+
+def extract_nodes_to_jsonl(
+    graph_path: str | Path,
+    repo_base_path: str | Path,
+    node_ids: list[int],
+    output_path: str | Path | None = None,
+) -> str:
+    import json
+
+    results = extract_nodes_text(graph_path, repo_base_path, node_ids)
+    lines = [
+        json.dumps(_result_to_jsonl_dict(results[node_id]), ensure_ascii=False)
+        for node_id in node_ids
+    ]
+    jsonl_content = "\n".join(lines)
+    if output_path:
+        Path(output_path).write_text(jsonl_content, encoding=cs.ENCODING_UTF8)
+    return jsonl_content
+
+
+def extract_nodes_file_to_jsonl(
+    graph_path: str | Path,
+    repo_base_path: str | Path,
+    input_file: str | Path,
+    output_path: str | Path | None = None,
+) -> str:
+    node_ids = read_node_ids_from_file(input_file)
+    return extract_nodes_to_jsonl(graph_path, repo_base_path, node_ids, output_path)
+
+
 def main() -> None:
     import argparse
 
