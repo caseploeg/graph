@@ -1,0 +1,6 @@
+/Users/caseploeg/code-graph-rag/batch/test_repos/click
+/Users/caseploeg/code-graph-rag/batch/test_repos/got
+/Users/caseploeg/code-graph-rag/batch/test_repos/log
+/Users/caseploeg/code-graph-rag/batch/test_repos/go-cmp
+/Users/caseploeg/code-graph-rag/batch/test_repos/okio
+/Users/caseploeg/code-graph-rag/batch/test_repos/django
