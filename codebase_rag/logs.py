@@ -392,6 +392,8 @@ IMP_CREATED_RELATIONSHIP = (
     "  Created IMPORTS relationship: {from_module} -> {to_module} (from {full_name})"
 )
 IMP_PARSE_FAILED = "Failed to parse imports in {module}: {error}"
+IMP_CREATED_EXTERNAL_NODE = "Created external MODULE node: {module_path}"
+IMP_EXTERNAL_IMPORT_COUNT = "Created {count} external MODULE nodes"
 IMP_IMPORT = "  Import: {local} -> {full}"
 IMP_ALIASED_IMPORT = "  Aliased import: {alias} -> {full}"
 IMP_WILDCARD_IMPORT = "  Wildcard import: * -> {module}"

@@ -1,10 +1,31 @@
 # External Dependency Import Investigation - Findings
 
-## Question
+## Status: ✅ IMPLEMENTED (2026-01-09)
+
+External MODULE node creation has been implemented! The graph now tracks which modules import external packages.
+
+### Implementation Summary
+- **PR**: `feat/external-module-imports` branch
+- **Files Modified**:
+  - `codebase_rag/parsers/import_processor.py` - Added external import detection and MODULE node creation
+  - `codebase_rag/logs.py` - Added logging messages for external node creation
+- **Testing**: Verified with minimal test repo and explorer function
+
+### What Changed
+The import processor now:
+1. Detects external imports (those without project prefix)
+2. Creates MODULE nodes for external packages before creating IMPORTS relationships
+3. Handles multi-language separator conventions (Go: `/`, Rust/C++: `::`, others: `.`)
+
+---
+
+## Original Investigation (2026-01-07)
+
+### Question
 Do IMPORT relationships exist for external dependencies to particular modules?
 
-## Answer
-**NO** - The current graph implementation does NOT create MODULE nodes or IMPORTS relationships for external dependencies at the module level.
+### Answer (Before Implementation)
+**NO** - The graph implementation did NOT create MODULE nodes or IMPORTS relationships for external dependencies at the module level.
 
 ## What the Graph Contains
 
@@ -180,3 +201,87 @@ Consider adding external MODULE nodes to the graph for:
 - **Nodes**: 5,541 total
 - **Relationships**: 14,996 total
 - **Format**: JSON export from Memgraph
+
+---
+
+## Implementation Results (2026-01-09)
+
+### Verification Test
+
+Created minimal test repository with external imports:
+```python
+import os
+import json
+from loguru import logger
+import numpy as np
+from typing import Dict
+```
+
+**Results**:
+- ✅ 5 external MODULE nodes created: `os`, `json`, `loguru`, `numpy`, `typing`
+- ✅ 5 IMPORTS relationships from local module to external modules
+- ✅ External modules distinguished by absence of `path` property
+- ✅ Explorer function `show_external_dependency_imports()` now returns actual results:
+
+```json
+{
+  "external_package": "loguru",
+  "version_spec": "loguru>=0.7.0",
+  "project_name": "test_mini_repo",
+  "importing_modules": [
+    {
+      "module": "test_mini_repo.test_imports",
+      "file_path": "test_imports.py",
+      "imported_entity": "loguru"
+    }
+  ],
+  "import_count": 1
+}
+```
+
+### What You CAN Do Now:
+
+1. ✅ **Find which modules import a specific external package** (direct graph query)
+   ```python
+   from codebase_rag.graph_loader import load_graph
+
+   loader = load_graph('graph.json')
+   pytest_nodes = [m for m in loader.find_nodes_by_label('Module')
+                   if m.properties.get('qualified_name') == 'pytest']
+   imports = [rel for rel in loader.relationships
+              if rel.type == 'IMPORTS' and rel.to_id == pytest_nodes[0].node_id]
+   # Returns 15 importing modules for Click repository
+   ```
+
+2. ✅ **Use explorer function** (for packages in dependency manifest)
+   ```bash
+   cgr deps-explore graph.json --package loguru
+   ```
+   **Limitation**: Explorer requires both ExternalPackage node (from manifest) AND MODULE node (from imports). Won't work for:
+   - Packages imported but not declared (e.g., pytest in test files)
+   - Package name != import name (e.g., pillow/PIL)
+
+3. ✅ **Trace import chains through external dependencies**
+   - MODULE → external MODULE relationships now exist in graph
+
+4. ✅ **Detect unused declared dependencies**
+   - Compare DEPENDS_ON_EXTERNAL (declared) vs IMPORTS (actually used)
+
+5. ✅ **Build dependency usage reports at module level**
+   - Query graph for all external imports per module
+
+### Implementation Details
+
+**External MODULE Node Schema**:
+```python
+{
+    "qualified_name": "loguru",    # No project prefix
+    "name": "loguru",              # Display name
+    # NO "path" property (distinguishes from local modules)
+}
+```
+
+**Multi-Language Support**:
+- Handles separator normalization for Go (`/`), Rust/C++ (`::`), and others (`.`)
+- All local modules use `project_name.` prefix with DOT separator
+- External detection works across all tree-sitter supported languages
