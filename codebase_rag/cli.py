@@ -420,6 +420,65 @@ def graph_loader_command(
         raise typer.Exit(1) from e
 
 
+@app.command(name="deps-explore", help="Explore external dependency imports in the graph")
+def deps_explore_command(
+    graph_file: str = typer.Argument(
+        "code-graph-rag-graph.json", help="Path to JSON graph export file"
+    ),
+    package: str | None = typer.Option(
+        None, "--package", "-p", help="Specific package to analyze (random if not specified)"
+    ),
+    json_output: bool = typer.Option(
+        False, "--json", help="Output raw JSON instead of formatted text"
+    ),
+) -> None:
+    import json
+
+    from .utils.external_dependency_explorer import show_external_dependency_imports
+
+    try:
+        result = show_external_dependency_imports(graph_file, package)
+
+        if json_output:
+            app_context.console.print(json.dumps(result, indent=2))
+        else:
+            app_context.console.print(
+                style(
+                    f"\n📦 External Package: {result['external_package']}", cs.Color.GREEN
+                )
+            )
+            app_context.console.print(
+                f"   Version: {result['version_spec'] or 'Not specified'}"
+            )
+            app_context.console.print(f"   Project: {result['project_name']}")
+            app_context.console.print(
+                f"   Imports: {result['import_count']}\n"
+            )
+
+            if result["importing_modules"]:
+                app_context.console.print(style("Importing modules:", cs.Color.CYAN))
+                for mod in result["importing_modules"]:
+                    app_context.console.print(f"  • {mod['module']}")
+                    app_context.console.print(f"    File: {mod['file_path']}")
+                    app_context.console.print(f"    Imports: {mod['imported_entity']}\n")
+            else:
+                app_context.console.print(
+                    style(
+                        "⚠️  No modules import this package (see EXTERNAL_DEPENDENCY_FINDINGS.md)",
+                        cs.Color.YELLOW,
+                    )
+                )
+
+    except ValueError as e:
+        app_context.console.print(style(f"Error: {e}", cs.Color.RED))
+        raise typer.Exit(1) from e
+    except Exception as e:
+        app_context.console.print(
+            style(f"Failed to analyze dependencies: {e}", cs.Color.RED)
+        )
+        raise typer.Exit(1) from e
+
+
 @app.command(
     name=ch.CLICommandName.LANGUAGE,
     help=ch.CMD_LANGUAGE,

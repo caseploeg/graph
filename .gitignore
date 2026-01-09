@@ -22,3 +22,13 @@ PROJECT.md
 .envrc
 .DS_Store
 .pypi_cache.json
+
+# Test directories
+test_repos/
+test_output/
+
+# Large JSON files
+*.json
+!package.json
+!tsconfig.json
+!.claude-plugin/plugin.json
