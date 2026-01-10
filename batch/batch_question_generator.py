@@ -2,14 +2,16 @@
 Batch Question Generator for Code Graph RAG
 
 Generate diverse questions for multiple repos after graph generation.
+Supports parallel processing across repos.
 
 Usage:
-    # Standalone usage
+    # Standalone usage with parallelism
     uv run python batch/batch_question_generator.py \
         --graphs-dir ./output \
         --clones-dir ./clones \
         --questions-dir ./questions \
-        --target-per-repo 10000
+        --target-per-repo 10000 \
+        --workers 8
 
     # Or called from large_scale_processor.py with --generate-questions
 """
@@ -17,7 +19,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import asdict
 from pathlib import Path
 from typing import Callable
@@ -94,9 +98,19 @@ def generate_questions_for_repo(
     target_questions: int = 10000,
     min_questions: int = 10,
     random_seed: int | None = None,
+    quiet: bool = False,
 ) -> dict:
     """
     Generate questions for a single repo.
+
+    Args:
+        graph_path: Path to the graph JSON file
+        repo_path: Path to the cloned repository
+        output_path: Path for output JSONL file
+        target_questions: Target number of questions
+        min_questions: Minimum candidates required
+        random_seed: Optional random seed for reproducibility
+        quiet: Suppress verbose output (for parallel workers)
 
     Returns summary dict with stats.
     """
@@ -116,7 +130,8 @@ def generate_questions_for_repo(
             "reason": f"Too few candidates ({num_candidates} < {min_questions})",
         }
 
-    print(f"  Candidates: {num_candidates}, generating up to {max_questions} questions")
+    if not quiet:
+        print(f"  Candidates: {num_candidates}, generating up to {max_questions} questions")
 
     try:
         prompts = generate_diverse_prompts(
@@ -125,6 +140,7 @@ def generate_questions_for_repo(
             num_prompts=max_questions,
             repo_name=repo_name,
             random_seed=random_seed,
+            quiet=quiet,
         )
 
         # Write to JSONL
@@ -153,7 +169,33 @@ def generate_questions_for_repo(
         }
 
 
+def generate_questions_worker(args: tuple) -> dict:
+    """Worker function for parallel question generation."""
+    # Suppress logging in subprocess to avoid interleaved output
+    import logging
+    from loguru import logger
+    logger.remove()
+    logger.add(lambda msg: None, level="ERROR")
+    logging.getLogger().setLevel(logging.ERROR)
+
+    graph_path, repo_path, output_path, target_questions, min_questions = args
+    return generate_questions_for_repo(
+        graph_path=graph_path,
+        repo_path=repo_path,
+        output_path=output_path,
+        target_questions=target_questions,
+        min_questions=min_questions,
+        quiet=True,  # Suppress output in worker processes
+    )
+
+
 QuestionCallback = Callable[[dict], None] | None
+
+
+def get_optimal_workers() -> int:
+    """Get optimal worker count (cpu_count - 2 for headroom)."""
+    cpu_count = os.cpu_count() or 4
+    return max(1, cpu_count - 2)
 
 
 def batch_generate_questions(
@@ -163,10 +205,11 @@ def batch_generate_questions(
     target_per_repo: int = 10000,
     min_questions: int = 10,
     limit: int | None = None,
+    workers: int | None = None,
     on_complete: QuestionCallback = None,
 ) -> list[dict]:
     """
-    Generate questions for all graphs in a directory.
+    Generate questions for all graphs in a directory using parallel processing.
 
     Args:
         graphs_dir: Directory containing graph JSON files
@@ -175,6 +218,7 @@ def batch_generate_questions(
         target_per_repo: Target questions per repo (capped by candidates)
         min_questions: Minimum candidates required to generate
         limit: Process only first N graphs
+        workers: Number of parallel workers (default: cpu_count - 2)
         on_complete: Callback for each completed repo
 
     Returns:
@@ -189,53 +233,74 @@ def batch_generate_questions(
     if limit:
         graph_files = graph_files[:limit]
 
+    workers = workers or get_optimal_workers()
+
     print(f"Found {len(graph_files)} graphs to process")
     print(f"Target questions per repo: {target_per_repo}")
     print(f"Minimum candidates required: {min_questions}")
+    print(f"Workers: {workers}")
     print("-" * 60)
 
     questions_dir.mkdir(parents=True, exist_ok=True)
-    results: list[dict] = []
-    total_generated = 0
 
-    for i, graph_path in enumerate(graph_files, 1):
+    # Build args list for all repos, tracking skipped ones
+    args_list = []
+    skipped_results: list[dict] = []
+
+    for graph_path in graph_files:
         repo_name = graph_path.stem
-        print(f"[{i}/{len(graph_files)}] {repo_name}")
-
-        # Find corresponding repo
         repo_path = get_repo_path_for_graph(graph_path, clones_dir)
+
         if repo_path is None:
-            result = {
+            skipped_results.append({
                 "repo": repo_name,
                 "graph": str(graph_path),
                 "generated": 0,
                 "skipped": True,
                 "reason": "Repo not found in clones directory",
-            }
-            results.append(result)
-            print(f"  Skipped: repo not found")
+            })
             continue
 
         output_path = questions_dir / f"{repo_name}_questions.jsonl"
+        args_list.append((graph_path, repo_path, output_path, target_per_repo, min_questions))
 
-        result = generate_questions_for_repo(
-            graph_path=graph_path,
-            repo_path=repo_path,
-            output_path=output_path,
-            target_questions=target_per_repo,
-            min_questions=min_questions,
-        )
+    print(f"Processing {len(args_list)} repos ({len(skipped_results)} skipped - repo not found)")
 
-        results.append(result)
-        total_generated += result.get("generated", 0)
+    # Process in parallel
+    results: list[dict] = list(skipped_results)  # Start with skipped results
+    total_generated = 0
+    completed = 0
+    total_to_process = len(args_list)
 
-        if result.get("skipped"):
-            print(f"  Skipped: {result.get('reason', 'unknown')}")
-        else:
-            print(f"  Generated: {result['generated']} questions")
+    with ProcessPoolExecutor(max_workers=workers) as executor:
+        futures = {executor.submit(generate_questions_worker, args): args for args in args_list}
 
-        if on_complete:
-            on_complete(result)
+        for future in as_completed(futures):
+            args = futures[future]
+            repo_name = args[0].stem
+            completed += 1
+
+            try:
+                result = future.result()
+            except Exception as e:
+                result = {
+                    "repo": repo_name,
+                    "graph": str(args[0]),
+                    "generated": 0,
+                    "skipped": True,
+                    "reason": str(e),
+                }
+
+            results.append(result)
+            total_generated += result.get("generated", 0)
+
+            # Progress output
+            status = "OK" if not result.get("skipped") else "SKIP"
+            gen_count = result.get("generated", 0)
+            print(f"[{completed}/{total_to_process}] {status}: {repo_name} ({gen_count:,} questions)")
+
+            if on_complete:
+                on_complete(result)
 
     print("-" * 60)
     print("SUMMARY")
@@ -258,6 +323,7 @@ def batch_generate_questions(
         "skipped": len(skipped),
         "total_questions": total_generated,
         "target_per_repo": target_per_repo,
+        "workers": workers,
         "results": results,
     }
     with open(summary_path, "w") as f:
@@ -269,7 +335,7 @@ def batch_generate_questions(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Generate questions for multiple repos"
+        description="Generate questions for multiple repos in parallel"
     )
     parser.add_argument(
         "--graphs-dir",
@@ -307,6 +373,12 @@ def main() -> None:
         default=None,
         help="Process only first N repos",
     )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=None,
+        help=f"Number of parallel workers (default: cpu_count - 2 = {get_optimal_workers()})",
+    )
 
     args = parser.parse_args()
 
@@ -325,6 +397,7 @@ def main() -> None:
         target_per_repo=args.target_per_repo,
         min_questions=args.min_questions,
         limit=args.limit,
+        workers=args.workers,
     )
 
 
