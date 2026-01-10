@@ -52,6 +52,11 @@ class LargeScaleConfig:
     skip_clone: bool = False
     limit: int | None = None
     languages: list[str] | None = None
+    # Question generation
+    generate_questions: bool = False
+    questions_dir: Path | None = None
+    target_questions_per_repo: int = 10000
+    min_questions: int = 10
 
 
 @dataclass
@@ -238,6 +243,30 @@ class LargeScaleBatchProcessor:
         self.process_results = results
         return results
 
+    def questions_phase(self) -> list[dict]:
+        """Generate questions for all processed repos."""
+        if not self.config.generate_questions:
+            return []
+
+        from batch.batch_question_generator import batch_generate_questions
+
+        questions_dir = self.config.questions_dir or (self.config.output_dir.parent / "questions")
+
+        print()
+        print("=" * 60)
+        print("QUESTION GENERATION")
+        print("=" * 60)
+
+        results = batch_generate_questions(
+            graphs_dir=self.config.output_dir,
+            clones_dir=self.config.clone_dir,
+            questions_dir=questions_dir,
+            target_per_repo=self.config.target_questions_per_repo,
+            min_questions=self.config.min_questions,
+        )
+
+        return results
+
     def upload_phase(self) -> list[str]:
         """Upload results to destination."""
         if not self.config.upload_to:
@@ -345,6 +374,10 @@ class LargeScaleBatchProcessor:
 
             self.ui.finish()
 
+        # Question generation phase (outside live UI context for cleaner output)
+        if self.config.generate_questions:
+            self.questions_phase()
+
         # Write summary
         summary = self.write_summary(start_time)
 
@@ -428,6 +461,30 @@ def main() -> None:
         default=3,
         help="Max clone retries per repo (default: 3)",
     )
+    # Question generation options
+    parser.add_argument(
+        "--generate-questions",
+        action="store_true",
+        help="Generate questions after graph processing",
+    )
+    parser.add_argument(
+        "--questions-dir",
+        type=Path,
+        default=None,
+        help="Directory for question JSONL files (default: sibling of output-dir)",
+    )
+    parser.add_argument(
+        "--target-questions",
+        type=int,
+        default=10000,
+        help="Target questions per repo (default: 10000, capped by candidates)",
+    )
+    parser.add_argument(
+        "--min-questions",
+        type=int,
+        default=10,
+        help="Minimum candidates to generate questions (default: 10)",
+    )
 
     args = parser.parse_args()
 
@@ -454,6 +511,10 @@ def main() -> None:
         skip_clone=args.skip_clone,
         limit=args.limit,
         languages=languages,
+        generate_questions=args.generate_questions,
+        questions_dir=args.questions_dir,
+        target_questions_per_repo=args.target_questions,
+        min_questions=args.min_questions,
     )
 
     print("=" * 60)
@@ -469,6 +530,9 @@ def main() -> None:
         print(f"Languages:   {', '.join(config.languages)}")
     if config.limit:
         print(f"Limit:       {config.limit}")
+    if config.generate_questions:
+        print(f"Questions:   {config.target_questions_per_repo}/repo (min {config.min_questions} candidates)")
+        print(f"Q. output:   {config.questions_dir or 'auto'}")
     print("=" * 60)
     print()
 

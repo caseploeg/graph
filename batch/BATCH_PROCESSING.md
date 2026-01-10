@@ -161,6 +161,60 @@ uv run python batch/large_scale_processor.py \
 | `--upload-to` | Upload to GCS or local path |
 | `--shallow` | Use shallow clones (default: True) |
 | `--max-retries` | Max clone retries per repo (default: 3) |
+| `--generate-questions` | Generate questions after processing |
+| `--questions-dir` | Directory for question JSONL files |
+| `--target-questions` | Target questions per repo (default: 10000) |
+| `--min-questions` | Minimum candidates to generate (default: 10) |
+
+## Question Generation
+
+Generate diverse evaluation questions alongside graphs:
+
+```bash
+uv run python batch/large_scale_processor.py \
+    --repo-list repos.json \
+    --clone-dir ./clones \
+    --output-dir ./graphs \
+    --generate-questions \
+    --target-questions 10000
+```
+
+### How It Works
+
+1. Each question uses a unique "seed" node (Function/Method with connections)
+2. Max questions per repo = number of candidate seed nodes
+3. Repos with fewer than `--min-questions` candidates are skipped
+4. Questions use various expansion strategies (callees, callers, chain, file, bfs)
+
+### Standalone Question Generation
+
+If you already have graphs, generate questions separately:
+
+```bash
+uv run python batch/batch_question_generator.py \
+    --graphs-dir ./graphs \
+    --clones-dir ./clones \
+    --questions-dir ./questions \
+    --target-per-repo 10000
+```
+
+### Question Output Format
+
+Each repo produces `{repo}_questions.jsonl` with records like:
+
+```json
+{
+  "prompt_id": "react_0001",
+  "repo_name": "react",
+  "primary_language": "javascript",
+  "expansion_strategy": "callees",
+  "seed_node_id": 42,
+  "seed_node_name": "useState",
+  "context_node_ids": [42, 55, 67],
+  "file_paths": ["src/hooks.js"],
+  "prompt_text": "..."
+}
+```
 
 ## Supported Languages
 
