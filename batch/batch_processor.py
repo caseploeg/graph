@@ -22,6 +22,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Callable
 
 BATCH_DIR = Path(__file__).parent
 PROJECT_ROOT = BATCH_DIR.parent
@@ -37,6 +38,10 @@ class ProcessResult:
     duration_seconds: float
     node_count: int
     relationship_count: int
+
+
+# Callback type for progress updates
+ProcessCallback = Callable[[ProcessResult], None] | None
 
 
 def process_single_repo(args: tuple[Path, Path]) -> ProcessResult:
@@ -88,6 +93,7 @@ def batch_process(
     workers: int = 4,
     limit: int | None = None,
     upload_to: str | None = None,
+    on_complete: ProcessCallback = None,
 ) -> list[ProcessResult]:
     repos = []
     for line in repo_list_file.read_text().splitlines():
@@ -122,6 +128,10 @@ def batch_process(
             repo_path = futures[future]
             result = future.result()
             results.append(result)
+
+            # Invoke callback if provided
+            if on_complete:
+                on_complete(result)
 
             status = "OK" if result.success else "FAILED"
             print(
