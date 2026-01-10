@@ -2,24 +2,24 @@
 """
 Generate diverse meta-prompts using multiple strategies.
 
-This showcase script generates diverse prompts by:
+This script generates diverse prompts by:
 1. Rotating through expansion strategies with configurable weights
 2. Using unique seeds to avoid repetition
-3. Outputting prompts for manual review or batch processing
+3. Outputting prompts as JSONL with rich metadata
 
 Usage:
-    # Generate 10 diverse prompts to stdout
+    # Generate 10 diverse prompts to stdout (JSONL)
     uv run python batch/generate_diverse_questions.py \
         --graph batch/test_output/click.json \
         --repo batch/test_repos/click \
         --num-prompts 10
 
-    # Save prompts to a directory
+    # Save prompts to a JSONL file
     uv run python batch/generate_diverse_questions.py \
         --graph batch/test_output/click.json \
         --repo batch/test_repos/click \
-        --num-prompts 20 \
-        --output-dir prompts/
+        --num-prompts 1000 \
+        --output prompts.jsonl
 
     # Customize strategy weights
     uv run python batch/generate_diverse_questions.py \
@@ -27,13 +27,23 @@ Usage:
         --repo batch/test_repos/click \
         --num-prompts 50 \
         --weights "callees:4,chain:3,file:2,callers:1,bfs:1"
+
+    # Override repo name
+    uv run python batch/generate_diverse_questions.py \
+        --graph batch/test_output/click.json \
+        --repo batch/test_repos/click \
+        --repo-name "pallets-click" \
+        --num-prompts 100 \
+        --output prompts.jsonl
 """
 from __future__ import annotations
 
 import argparse
+import json
 import random
 import sys
 from collections import Counter
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 BATCH_DIR = Path(__file__).parent
@@ -43,10 +53,12 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from codebase_rag.graph_loader import GraphLoader
 from codebase_rag.node_text_extractor import NodeTextExtractor
 
+from evaluation_prompt_builder import detect_primary_language
 from question_generator import (
     EXPANSION_STRATEGIES,
     META_PROMPT,
     build_context,
+    collect_files_from_nodes,
     expand_callee_tree,
     expand_caller_tree,
     expand_chain_with_siblings,
@@ -55,6 +67,22 @@ from question_generator import (
     get_all_candidate_seeds,
     sample_seed_node,
 )
+
+
+@dataclass
+class DiversePromptRecord:
+    """A generated prompt with rich metadata for downstream processing."""
+
+    prompt_id: str
+    repo_name: str
+    primary_language: str
+    expansion_strategy: str
+    seed_node_id: int
+    seed_node_name: str
+    seed_node_qualified_name: str
+    context_node_ids: list[int]
+    file_paths: list[str]
+    prompt_text: str
 
 
 STRATEGY_WEIGHTS = {
@@ -110,14 +138,14 @@ def generate_diverse_prompts(
     graph_path: Path,
     repo_path: Path,
     num_prompts: int,
-    output_dir: Path | None = None,
+    repo_name: str | None = None,
     weights: dict[str, int] | None = None,
     max_tokens: int = 8000,
     random_seed: int | None = None,
-) -> list[tuple[str, str, int, str]]:
+) -> list[DiversePromptRecord]:
     """Generate prompts with strategy rotation for diversity.
 
-    Returns list of (prompt, strategy, seed_id, seed_name) tuples.
+    Returns list of DiversePromptRecord objects with rich metadata.
     """
     if random_seed is not None:
         random.seed(random_seed)
@@ -125,6 +153,13 @@ def generate_diverse_prompts(
 
     if weights is None:
         weights = STRATEGY_WEIGHTS.copy()
+
+    # Derive repo_name and detect language once at start
+    if repo_name is None:
+        repo_name = repo_path.name
+    primary_language = detect_primary_language(repo_path)
+    print(f"Repository: {repo_name}", file=sys.stderr)
+    print(f"Primary language: {primary_language}", file=sys.stderr)
 
     strategy_queue = build_strategy_queue(weights)
     print(f"Strategy queue (first 20): {strategy_queue[:20]}", file=sys.stderr)
@@ -145,7 +180,7 @@ def generate_diverse_prompts(
 
     extractor = NodeTextExtractor(graph_path, repo_path)
 
-    prompts: list[tuple[str, str, int, str]] = []
+    prompts: list[DiversePromptRecord] = []
     used_seeds: set[int] = set()
     strategy_idx = 0
     strategy_counts: Counter[str] = Counter()
@@ -169,6 +204,7 @@ def generate_diverse_prompts(
 
         used_seeds.add(seed.node_id)
         seed_name = seed.properties.get("name", f"node_{seed.node_id}")
+        seed_qualified_name = seed.properties.get("qualified_name", "")
 
         print(
             f"[{len(prompts) + 1:3d}/{num_prompts}] "
@@ -185,10 +221,28 @@ def generate_diverse_prompts(
             print("  -> Skipped (no source)", file=sys.stderr)
             continue
 
-        prompt = META_PROMPT.format(
+        prompt_text = META_PROMPT.format(
             graph_context=graph_context, source_context=source_context
         )
-        prompts.append((prompt, strategy, seed.node_id, seed_name))
+
+        # Collect file paths from context nodes
+        file_paths = sorted(collect_files_from_nodes(graph, context_nodes))
+
+        # Build the record with all metadata
+        prompt_id = f"{repo_name}_{len(prompts) + 1:04d}"
+        record = DiversePromptRecord(
+            prompt_id=prompt_id,
+            repo_name=repo_name,
+            primary_language=primary_language,
+            expansion_strategy=strategy,
+            seed_node_id=seed.node_id,
+            seed_node_name=seed_name,
+            seed_node_qualified_name=seed_qualified_name,
+            context_node_ids=sorted(context_nodes),
+            file_paths=file_paths,
+            prompt_text=prompt_text,
+        )
+        prompts.append(record)
         strategy_counts[strategy] += 1
 
     print(file=sys.stderr)
@@ -206,15 +260,16 @@ def generate_diverse_prompts(
         print(f"  {strategy:10s}: {count:3d} ({pct:5.1f}%)", file=sys.stderr)
     print(file=sys.stderr)
 
-    if output_dir:
-        output_dir.mkdir(parents=True, exist_ok=True)
-        for i, (prompt, strategy, seed_id, seed_name) in enumerate(prompts):
-            filename = f"{i+1:03d}_{strategy}_{seed_name}.txt"
-            filepath = output_dir / filename
-            filepath.write_text(prompt, encoding="utf-8")
-        print(f"Wrote {len(prompts)} prompts to: {output_dir}/", file=sys.stderr)
-
     return prompts
+
+
+def write_prompts_to_jsonl(prompts: list[DiversePromptRecord], output_path: Path) -> None:
+    """Write prompt records to a JSONL file."""
+    lines = []
+    for record in prompts:
+        lines.append(json.dumps(asdict(record), ensure_ascii=False))
+    output_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print(f"Wrote {len(prompts)} prompts to: {output_path}", file=sys.stderr)
 
 
 def main() -> None:
@@ -252,10 +307,16 @@ def main() -> None:
         help="Random seed for reproducibility",
     )
     parser.add_argument(
-        "--output-dir",
+        "--output",
         type=Path,
         default=None,
-        help="Output directory for prompt files (default: print to stdout)",
+        help="Output JSONL file (default: print JSONL to stdout)",
+    )
+    parser.add_argument(
+        "--repo-name",
+        type=str,
+        default=None,
+        help="Repository name for output metadata (default: derived from --repo path)",
     )
 
     args = parser.parse_args()
@@ -272,26 +333,28 @@ def main() -> None:
     if args.weights:
         weights = parse_weights(args.weights)
         if not weights:
-            print(f"Warning: Could not parse weights '{args.weights}', using defaults", file=sys.stderr)
+            print(
+                f"Warning: Could not parse weights '{args.weights}', using defaults",
+                file=sys.stderr,
+            )
             weights = None
 
     prompts = generate_diverse_prompts(
         graph_path=args.graph,
         repo_path=args.repo,
         num_prompts=args.num_prompts,
-        output_dir=args.output_dir,
+        repo_name=args.repo_name,
         weights=weights,
         max_tokens=args.max_tokens,
         random_seed=args.random_seed,
     )
 
-    if not args.output_dir:
-        for i, (prompt, strategy, seed_id, seed_name) in enumerate(prompts):
-            print("=" * 80)
-            print(f"PROMPT {i+1}: strategy={strategy}, seed={seed_name} (id={seed_id})")
-            print("=" * 80)
-            print(prompt)
-            print()
+    if args.output:
+        write_prompts_to_jsonl(prompts, args.output)
+    else:
+        # Print JSONL to stdout
+        for record in prompts:
+            print(json.dumps(asdict(record), ensure_ascii=False))
 
 
 if __name__ == "__main__":
