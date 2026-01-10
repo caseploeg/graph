@@ -1,6 +1,7 @@
 import sys
 from collections import OrderedDict, defaultdict
 from collections.abc import Callable, ItemsView, KeysView
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from loguru import logger
@@ -366,7 +367,17 @@ class GraphUpdater:
                 logger.debug(ls.CLEANED_SIMPLE_NAME.format(name=simple_name))
 
     def _process_files(self) -> None:
-        # Use pre-enumerated files from FileEnumerator (single rglob)
+        """
+        Process all files in the repository.
+
+        Uses a two-phase approach for parallelization:
+        1. Parse files in parallel (tree-sitter releases GIL)
+        2. Process parsed ASTs sequentially (state updates)
+        """
+        # Categorize files
+        parseable_files: list[tuple[Path, cs.SupportedLanguage]] = []
+        dependency_files: list[Path] = []
+
         for filepath in self.file_enumerator.files:
             lang_config = get_language_spec(filepath.suffix)
             if (
@@ -374,21 +385,90 @@ class GraphUpdater:
                 and isinstance(lang_config.language, cs.SupportedLanguage)
                 and lang_config.language in self.parsers
             ):
+                parseable_files.append((filepath, lang_config.language))
+            elif self._is_dependency_file(filepath.name, filepath):
+                dependency_files.append(filepath)
+
+        # Phase 1: Parse files in parallel (tree-sitter releases GIL)
+        parse_results: dict[Path, tuple[Node, bytes]] = {}
+        num_workers = getattr(settings, "FILE_PARSE_THREADS", 4)
+
+        with ThreadPoolExecutor(max_workers=num_workers) as executor:
+            future_to_file = {
+                executor.submit(self._parse_file_only, fp, lang): (fp, lang)
+                for fp, lang in parseable_files
+            }
+            for future in as_completed(future_to_file):
+                filepath, _ = future_to_file[future]
+                try:
+                    result = future.result()
+                    if result:
+                        parse_results[filepath] = result
+                except Exception as e:
+                    logger.error(ls.PARSE_WORKER_FAILED.format(path=filepath, error=e))
+
+        # Phase 2: Process parsed ASTs sequentially (state updates)
+        for filepath, language in parseable_files:
+            if filepath in parse_results:
+                root_node, source_bytes = parse_results[filepath]
                 result = self.factory.definition_processor.process_file(
                     filepath,
-                    lang_config.language,
+                    language,
                     self.queries,
                     self.factory.structure_processor.structural_elements,
+                    pre_parsed=(root_node, source_bytes),
                 )
                 if result:
-                    root_node, language = result
-                    self.ast_cache[filepath] = (root_node, language)
-            elif self._is_dependency_file(filepath.name, filepath):
-                self.factory.definition_processor.process_dependencies(filepath)
+                    ast_node, lang = result
+                    self.ast_cache[filepath] = (ast_node, lang)
 
             self.factory.structure_processor.process_generic_file(
                 filepath, filepath.name
             )
+
+        # Process dependency files
+        for filepath in dependency_files:
+            self.factory.definition_processor.process_dependencies(filepath)
+            self.factory.structure_processor.process_generic_file(
+                filepath, filepath.name
+            )
+
+        # Process remaining non-parseable files (other generic files)
+        parseable_paths = {fp for fp, _ in parseable_files}
+        dep_paths = set(dependency_files)
+        for filepath in self.file_enumerator.files:
+            if filepath not in parseable_paths and filepath not in dep_paths:
+                self.factory.structure_processor.process_generic_file(
+                    filepath, filepath.name
+                )
+
+    def _parse_file_only(
+        self, filepath: Path, language: cs.SupportedLanguage
+    ) -> tuple[Node, bytes] | None:
+        """
+        Parse a file without updating any state. Thread-safe.
+
+        This method only performs I/O and tree-sitter parsing, both of which
+        release the GIL and can run in parallel.
+
+        Args:
+            filepath: Path to the file to parse
+            language: The language of the file
+
+        Returns:
+            Tuple of (root_node, source_bytes) if successful, None otherwise
+        """
+        try:
+            source_bytes = filepath.read_bytes()
+            lang_queries = self.queries[language]
+            parser = lang_queries.get(cs.KEY_PARSER)
+            if not parser:
+                return None
+            tree = parser.parse(source_bytes)
+            return (tree.root_node, source_bytes)
+        except Exception as e:
+            logger.error(ls.PARSE_WORKER_FAILED.format(path=filepath, error=e))
+            return None
 
     def _process_function_calls(self) -> None:
         ast_cache_items = sorted(self.ast_cache.items(), key=lambda x: str(x[0]))

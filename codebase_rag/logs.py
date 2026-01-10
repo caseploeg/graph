@@ -615,3 +615,6 @@ EXCLUDE_INVALID_INPUT = "Invalid input: '{input}' (expected number)"
 # (H) File enumeration logs
 FILE_ENUM_ALREADY_DONE = "File enumeration already completed, skipping"
 FILE_ENUM_COMPLETE = "File enumeration complete: {dirs} directories, {files} files"
+
+# (H) Parallel parsing logs
+PARSE_WORKER_FAILED = "Parse worker failed for {path}: {error}"

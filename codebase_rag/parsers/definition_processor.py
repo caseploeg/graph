@@ -56,7 +56,22 @@ class DefinitionProcessor(
         language: cs.SupportedLanguage,
         queries: dict[cs.SupportedLanguage, LanguageQueries],
         structural_elements: dict[Path, str | None],
+        pre_parsed: tuple[ASTNode, bytes] | None = None,
     ) -> tuple[ASTNode, cs.SupportedLanguage] | None:
+        """
+        Process a source file and extract definitions.
+
+        Args:
+            file_path: Path to the file
+            language: Language of the file
+            queries: Language queries for parsing
+            structural_elements: Mapping of paths to package qualified names
+            pre_parsed: Optional pre-parsed (root_node, source_bytes) tuple.
+                       If provided, skips parsing (used for parallel parsing).
+
+        Returns:
+            Tuple of (root_node, language) if successful, None otherwise
+        """
         if isinstance(file_path, str):
             file_path = Path(file_path)
         relative_path = file_path.relative_to(self.repo_path)
@@ -75,15 +90,20 @@ class DefinitionProcessor(
                 return None
 
             self._handler = get_handler(language)
-            source_bytes = file_path.read_bytes()
-            lang_queries = queries[language]
-            parser = lang_queries.get(cs.KEY_PARSER)
-            if not parser:
-                logger.warning(ls.DEF_NO_PARSER.format(language=language))
-                return None
 
-            tree = parser.parse(source_bytes)
-            root_node = tree.root_node
+            # Use pre-parsed AST if available (from parallel parsing)
+            if pre_parsed is not None:
+                root_node, source_bytes = pre_parsed
+            else:
+                # Parse the file (fallback for non-parallel processing)
+                source_bytes = file_path.read_bytes()
+                lang_queries = queries[language]
+                parser = lang_queries.get(cs.KEY_PARSER)
+                if not parser:
+                    logger.warning(ls.DEF_NO_PARSER.format(language=language))
+                    return None
+                tree = parser.parse(source_bytes)
+                root_node = tree.root_node
 
             module_qn = cs.SEPARATOR_DOT.join(
                 [self.project_name] + list(relative_path.with_suffix("").parts)
