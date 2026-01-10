@@ -118,7 +118,7 @@ class FunctionRegistryTrie:
                 if filter_fn is None or filter_fn(qn):
                     results.append((qn, func_type))
 
-            for key, child in n.items():
+            for key, child in sorted(n.items()):
                 if not key.startswith(cs.TRIE_INTERNAL_PREFIX):
                     assert isinstance(child, dict)
                     dfs(child)
@@ -309,7 +309,7 @@ class GraphUpdater:
         if qns_to_remove:
             logger.debug(ls.REMOVING_QNS.format(count=len(qns_to_remove)))
 
-        for simple_name, qn_set in self.simple_name_lookup.items():
+        for simple_name, qn_set in sorted(self.simple_name_lookup.items()):
             original_count = len(qn_set)
             new_qn_set = qn_set - qns_to_remove
             if len(new_qn_set) < original_count:
@@ -317,7 +317,7 @@ class GraphUpdater:
                 logger.debug(ls.CLEANED_SIMPLE_NAME.format(name=simple_name))
 
     def _process_files(self) -> None:
-        for filepath in self.repo_path.rglob("*"):
+        for filepath in sorted(self.repo_path.rglob("*")):
             if filepath.is_file() and not should_skip_path(
                 filepath,
                 self.repo_path,
@@ -347,7 +347,7 @@ class GraphUpdater:
                 )
 
     def _process_function_calls(self) -> None:
-        ast_cache_items = list(self.ast_cache.items())
+        ast_cache_items = sorted(self.ast_cache.items(), key=lambda x: str(x[0]))
         for file_path, (root_node, language) in ast_cache_items:
             self.factory.call_processor.process_calls_in_file(
                 file_path, root_node, language, self.queries

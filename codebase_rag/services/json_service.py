@@ -73,7 +73,16 @@ class JsonFileIngestor:
     def flush_all(self) -> None:
         logger.info(ls.JSON_FLUSHING.format(path=self.output_path))
 
-        nodes_list = list(self._nodes.values())
+        # Sort nodes by qualified_name for deterministic output
+        nodes_list = sorted(
+            self._nodes.values(),
+            key=lambda n: (
+                n.get(cs.KEY_LABELS, [""])[0],
+                n.get(cs.KEY_PROPERTIES, {}).get("qualified_name", "")
+                or n.get(cs.KEY_PROPERTIES, {}).get("name", "")
+                or n.get(cs.KEY_PROPERTIES, {}).get("path", ""),
+            ),
+        )
 
         resolved_relationships = []
         for rel in self._relationships:
@@ -94,6 +103,11 @@ class JsonFileIngestor:
                     )
                 )
 
+        # Sort relationships for deterministic output
+        resolved_relationships.sort(
+            key=lambda r: (r[cs.KEY_FROM_ID], r[cs.KEY_TYPE], r[cs.KEY_TO_ID])
+        )
+
         metadata: GraphMetadata = {
             cs.KEY_TOTAL_NODES: len(nodes_list),
             cs.KEY_TOTAL_RELATIONSHIPS: len(resolved_relationships),
@@ -108,7 +122,7 @@ class JsonFileIngestor:
 
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
         with open(self.output_path, "w", encoding=cs.ENCODING_UTF8) as f:
-            json.dump(graph_data, f, indent=cs.JSON_INDENT, ensure_ascii=False)
+            json.dump(graph_data, f, indent=cs.JSON_INDENT, ensure_ascii=False, sort_keys=True)
 
         logger.success(
             ls.JSON_FLUSH_SUCCESS.format(

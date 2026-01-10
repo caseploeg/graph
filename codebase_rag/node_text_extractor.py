@@ -309,7 +309,7 @@ def get_node_chunks(
 ) -> dict[int, NodeChunk | None]:
     results = extract_nodes_text(graph_path, repo_base_path, node_ids)
     output: dict[int, NodeChunk | None] = {}
-    for node_id, result in results.items():
+    for node_id, result in sorted(results.items()):
         if result.error or result.file_path is None or result.code_chunk is None:
             output[node_id] = None
         else:
@@ -393,7 +393,7 @@ def main() -> None:
 
     results = extract_nodes_text(args.graph_path, args.repo_base_path, args.node_ids)
 
-    for node_id, result in results.items():
+    for node_id, result in sorted(results.items()):
         click.echo(f"=== Node {node_id} ===")
         click.echo(f"qualified_name: {result.qualified_name}")
         click.echo(f"file_path: {result.file_path}")

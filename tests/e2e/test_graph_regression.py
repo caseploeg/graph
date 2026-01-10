@@ -17,16 +17,16 @@ import pytest
 from .graph_compare import assert_graphs_equal, compare_graphs
 
 
-# Properties that may have non-deterministic values due to parsing order,
-# decorator handling variations, or inline module handling
-VOLATILE_PROPERTIES = {
+# Properties that are inherently non-deterministic due to AST parsing behavior.
+# These cannot be made deterministic without significant parser changes.
+# - start_line/end_line: Decorated functions can have varying line ranges
+# - decorators: Decorator extraction depends on parsing order
+# - docstring: Can vary based on how docstrings are associated with nodes
+VOLATILE_PROPERTIES: set[str] = {
     "start_line",
     "end_line",
     "decorators",
     "docstring",
-    # Module path/name can differ for inline Rust modules
-    "path",
-    "name",
 }
 
 
@@ -75,8 +75,9 @@ class TestGraphGenerationRegression:
         )
 
 
-# Allow small tolerance for non-determinism in call resolution
-COUNT_TOLERANCE = 5
+# Minimal tolerance for residual non-determinism in call resolution
+# This was reduced from 5 to 1 after deterministic generation improvements
+COUNT_TOLERANCE = 1
 
 
 @pytest.mark.e2e

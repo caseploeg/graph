@@ -43,7 +43,7 @@ class PyProjectTomlParser(DependencyParser):
             ):
                 dependencies.extend(
                     Dependency(dep_name, str(dep_spec))
-                    for dep_name, dep_spec in poetry_deps.items()
+                    for dep_name, dep_spec in sorted(poetry_deps.items())
                     if dep_name.lower() != cs.DEP_EXCLUDE_PYTHON
                 )
             if project_deps := data.get(cs.DEP_KEY_PROJECT, {}).get(
@@ -57,7 +57,7 @@ class PyProjectTomlParser(DependencyParser):
             optional_deps = data.get(cs.DEP_KEY_PROJECT, {}).get(
                 cs.DEP_KEY_OPTIONAL_DEPS, {}
             )
-            for group_name, deps in optional_deps.items():
+            for group_name, deps in sorted(optional_deps.items()):
                 for dep_line in deps:
                     dep_name, _ = _extract_pep508_package_name(dep_line)
                     if dep_name:
@@ -115,7 +115,7 @@ class PackageJsonParser(DependencyParser):
         ):
             dependencies.extend(
                 Dependency(dep_name, dep_spec)
-                for dep_name, dep_spec in data.get(key, {}).items()
+                for dep_name, dep_spec in sorted(data.get(key, {}).items())
             )
 
 
@@ -126,7 +126,7 @@ class CargoTomlParser(DependencyParser):
             data = toml.load(file_path)
 
             deps = data.get(cs.DEP_KEY_DEPENDENCIES, {})
-            for dep_name, dep_spec in deps.items():
+            for dep_name, dep_spec in sorted(deps.items()):
                 version = (
                     dep_spec
                     if isinstance(dep_spec, str)
@@ -135,7 +135,7 @@ class CargoTomlParser(DependencyParser):
                 dependencies.append(Dependency(dep_name, version))
 
             dev_deps = data.get(cs.DEP_KEY_DEV_DEPENDENCIES, {})
-            for dep_name, dep_spec in dev_deps.items():
+            for dep_name, dep_spec in sorted(dev_deps.items()):
                 version = (
                     dep_spec
                     if isinstance(dep_spec, str)
@@ -215,13 +215,13 @@ class ComposerJsonParser(DependencyParser):
             deps = data.get(cs.DEP_KEY_REQUIRE, {})
             dependencies.extend(
                 Dependency(dep_name, dep_spec)
-                for dep_name, dep_spec in deps.items()
+                for dep_name, dep_spec in sorted(deps.items())
                 if dep_name != cs.DEP_EXCLUDE_PHP
             )
             dev_deps = data.get(cs.DEP_KEY_REQUIRE_DEV, {})
             dependencies.extend(
                 Dependency(dep_name, dep_spec)
-                for dep_name, dep_spec in dev_deps.items()
+                for dep_name, dep_spec in sorted(dev_deps.items())
             )
         except Exception as e:
             logger.error(ls.DEP_PARSE_ERROR_COMPOSER.format(path=file_path, error=e))

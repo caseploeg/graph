@@ -61,7 +61,7 @@ class JavaTypeInferenceEngine(
             if value not in modules:
                 modules.append(value)
 
-        for module_qn in self.module_qn_to_file_path.keys():
+        for module_qn in sorted(self.module_qn_to_file_path.keys()):
             parts = module_qn.split(cs.SEPARATOR_DOT)
             if package_start_idx := find_package_start_index(parts):
                 if simple_class_name := cs.SEPARATOR_DOT.join(
