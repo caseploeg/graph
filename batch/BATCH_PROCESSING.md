@@ -198,9 +198,23 @@ uv run python batch/batch_question_generator.py \
     --target-per-repo 10000
 ```
 
-### Question Output Format
+### Question Output Structure
 
-Each repo produces `{repo}_questions.jsonl` with records like:
+Questions are written as one JSONL file per repo:
+
+```
+questions/
+├── react_questions.jsonl      # One file per repo
+├── express_questions.jsonl
+├── ruff_questions.jsonl
+├── svelte_questions.jsonl
+├── ...
+└── _questions_summary.json    # Aggregate stats
+```
+
+### Question Record Format
+
+Each line in a JSONL file is one question:
 
 ```json
 {
@@ -213,6 +227,21 @@ Each repo produces `{repo}_questions.jsonl` with records like:
   "context_node_ids": [42, 55, 67],
   "file_paths": ["src/hooks.js"],
   "prompt_text": "..."
+}
+```
+
+### Questions Summary
+
+The `_questions_summary.json` contains aggregate stats:
+
+```json
+{
+  "total_repos": 100,
+  "successful": 85,
+  "skipped": 15,
+  "total_questions": 523000,
+  "target_per_repo": 10000,
+  "results": [...]
 }
 ```
 

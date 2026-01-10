@@ -49,6 +49,13 @@ def process_single_repo(args: tuple[Path, Path]) -> ProcessResult:
     start_time = time.time()
 
     try:
+        # Suppress logging in subprocess to avoid interfering with Rich UI
+        import logging
+        from loguru import logger
+        logger.remove()  # Remove default handler
+        logger.add(lambda msg: None, level="ERROR")  # Only show errors
+        logging.getLogger().setLevel(logging.ERROR)
+
         from codebase_rag.graph_updater import GraphUpdater
         from codebase_rag.parser_loader import load_parsers
         from codebase_rag.services import JsonFileIngestor

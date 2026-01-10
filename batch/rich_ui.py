@@ -52,6 +52,7 @@ class BatchStats:
     start_time: float = field(default_factory=time.time)
     current_repo: str = ""
     phase: str = "initializing"  # "cloning" | "processing" | "uploading" | "done"
+    in_progress_repos: list[str] = field(default_factory=list)  # Currently processing
 
     @property
     def elapsed_seconds(self) -> float:
@@ -188,6 +189,14 @@ class BatchProgressUI:
 
         self._refresh()
 
+    def mark_repo_started(self, repo_path: str) -> None:
+        """Mark a repo as started processing."""
+        repo_name = repo_path.split("/")[-1]
+        if repo_name not in self.stats.in_progress_repos:
+            self.stats.in_progress_repos.append(repo_name)
+        self.stats.current_repo = repo_name
+        self._refresh()
+
     def update_process_progress(self, result: ProcessResult) -> None:
         """Update after processing completes."""
         if result.success:
@@ -198,6 +207,9 @@ class BatchProgressUI:
             self.stats.process_failed += 1
 
         repo_name = result.repo_path.split("/")[-1]
+        # Remove from in-progress list
+        if repo_name in self.stats.in_progress_repos:
+            self.stats.in_progress_repos.remove(repo_name)
         self.stats.current_repo = repo_name
 
         # Add to activity log
@@ -246,12 +258,11 @@ class BatchProgressUI:
 
     def _render_dashboard(self) -> Panel:
         """Render the full dashboard."""
-        layout = Layout()
-
         # Build sections
         header = self._render_header()
         progress_section = self._render_progress()
         stats_section = self._render_stats()
+        workers_section = self._render_workers()
         activity_section = self._render_activity()
 
         # Combine into a group
@@ -261,6 +272,8 @@ class BatchProgressUI:
             progress_section,
             Text(""),
             stats_section,
+            Text(""),
+            workers_section,
             Text(""),
             activity_section,
         )
@@ -344,6 +357,28 @@ class BatchProgressUI:
         )
 
         return table
+
+    def _render_workers(self) -> Panel:
+        """Render currently processing repos."""
+        if not self.stats.in_progress_repos:
+            return Panel(
+                Text("Waiting for workers...", style="dim"),
+                title="Currently Processing",
+                border_style="dim",
+            )
+
+        lines: list[Text] = []
+        for i, repo_name in enumerate(self.stats.in_progress_repos):
+            line = Text()
+            line.append(f"  Worker {i + 1}: ", style="dim")
+            line.append(repo_name, style="bold cyan")
+            lines.append(line)
+
+        return Panel(
+            Group(*lines),
+            title=f"Currently Processing ({len(self.stats.in_progress_repos)} workers)",
+            border_style="cyan",
+        )
 
     def _render_activity(self) -> Panel:
         """Render activity log."""
