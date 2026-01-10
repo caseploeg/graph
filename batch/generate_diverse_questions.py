@@ -186,6 +186,8 @@ def generate_diverse_prompts(
     graph.load()
 
     all_candidates = get_all_candidate_seeds(graph)
+    # Build a dict for O(1) lookup of available candidates
+    candidate_dict = {node.node_id: (node, count) for node, count in all_candidates}
 
     if not quiet:
         print(f"Found {len(all_candidates)} candidate seed nodes", file=sys.stderr)
@@ -216,11 +218,16 @@ def generate_diverse_prompts(
         strategy = strategy_queue[strategy_idx % len(strategy_queue)]
         strategy_idx += 1
 
-        seed = sample_seed_node(graph, exclude_ids=used_seeds)
-        if seed is None:
+        # Sample from cached candidates (O(1) lookup instead of recomputing all)
+        available = [(n, c) for nid, (n, c) in candidate_dict.items() if nid not in used_seeds]
+        if not available:
             if not quiet:
                 print(f"\nExhausted seed pool at prompt {len(prompts)}", file=sys.stderr)
             break
+
+        # Weighted random selection
+        weights_list = [c for _, c in available]
+        seed = random.choices(available, weights=weights_list, k=1)[0][0]
 
         used_seeds.add(seed.node_id)
         seed_name = seed.properties.get("name", f"node_{seed.node_id}")

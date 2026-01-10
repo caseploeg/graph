@@ -283,10 +283,26 @@ EXPANSION_STRATEGIES = {
 
 
 def format_code_chunk(
-    node: GraphNode, result: NodeTextResult, graph: GraphLoader
+    node: GraphNode,
+    result: NodeTextResult,
+    graph: GraphLoader,
+    rel_cache: dict[int, dict] | None = None,
 ) -> str:
-    outgoing = graph.get_outgoing_relationships(node.node_id)
-    incoming = graph.get_incoming_relationships(node.node_id)
+    """Format a code chunk with relationship context.
+
+    Args:
+        node: The graph node
+        result: Text extraction result
+        graph: Graph loader
+        rel_cache: Optional pre-computed relationship cache {node_id: {'out': [...], 'in': [...]}}
+    """
+    # Use cached relationships if available, otherwise fetch
+    if rel_cache and node.node_id in rel_cache:
+        outgoing = rel_cache[node.node_id]['out']
+        incoming = rel_cache[node.node_id]['in']
+    else:
+        outgoing = graph.get_outgoing_relationships(node.node_id)
+        incoming = graph.get_incoming_relationships(node.node_id)
 
     calls = [r for r in outgoing if r.type == "CALLS"]
     called_by = [r for r in incoming if r.type == "CALLS"]
@@ -600,6 +616,14 @@ def build_source_context(
 
     prioritized = sorted(node_ids, key=lambda nid: (distances.get(nid, 999), nid))
 
+    # Pre-compute relationship cache for all context nodes to avoid redundant fetches
+    rel_cache: dict[int, dict] = {}
+    for node_id in node_ids:
+        rel_cache[node_id] = {
+            'out': graph.get_outgoing_relationships(node_id),
+            'in': graph.get_incoming_relationships(node_id),
+        }
+
     chunks = []
     total_chars = 0
     skipped_nodes: list[str] = []
@@ -613,7 +637,7 @@ def build_source_context(
         if result.error or not result.code_chunk:
             continue
 
-        chunk = format_code_chunk(node, result, graph)
+        chunk = format_code_chunk(node, result, graph, rel_cache=rel_cache)
         chunk_len = len(chunk)
 
         if total_chars + chunk_len > max_chars:
