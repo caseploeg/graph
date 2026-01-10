@@ -155,6 +155,8 @@ class AppConfig(BaseSettings):
 
     # Parallel file parsing threads (tree-sitter releases GIL)
     FILE_PARSE_THREADS: int = 4
+    # Parallel call resolution threads
+    CALL_RESOLUTION_THREADS: int = 2
 
     OLLAMA_HEALTH_TIMEOUT: float = 5.0
 

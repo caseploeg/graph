@@ -471,11 +471,35 @@ class GraphUpdater:
             return None
 
     def _process_function_calls(self) -> None:
+        """
+        Process function calls for all cached ASTs.
+
+        Uses parallel processing when multiple files are cached, as the
+        ingestor is now thread-safe and tree-sitter queries release the GIL.
+        """
         ast_cache_items = sorted(self.ast_cache.items(), key=lambda x: str(x[0]))
-        for file_path, (root_node, language) in ast_cache_items:
+
+        if len(ast_cache_items) <= 1:
+            # Single file - no benefit from parallelism
+            for file_path, (root_node, language) in ast_cache_items:
+                self.factory.call_processor.process_calls_in_file(
+                    file_path, root_node, language, self.queries
+                )
+            return
+
+        # Process multiple files in parallel
+        num_workers = getattr(settings, "CALL_RESOLUTION_THREADS", 2)
+
+        def process_file_calls(
+            item: tuple[Path, tuple[Node, cs.SupportedLanguage]]
+        ) -> None:
+            file_path, (root_node, language) = item
             self.factory.call_processor.process_calls_in_file(
                 file_path, root_node, language, self.queries
             )
+
+        with ThreadPoolExecutor(max_workers=num_workers) as executor:
+            list(executor.map(process_file_calls, ast_cache_items))
 
     def _generate_semantic_embeddings(self) -> None:
         if not has_semantic_dependencies():

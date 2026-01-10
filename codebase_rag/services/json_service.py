@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -15,12 +16,20 @@ NAME_BASED_LABELS = frozenset({cs.NodeLabel.EXTERNAL_PACKAGE, cs.NodeLabel.PROJE
 
 
 class JsonFileIngestor:
+    """
+    Thread-safe JSON file ingestor for graph data.
+
+    Uses a lock to protect concurrent access to internal data structures,
+    enabling parallel file processing and call resolution.
+    """
+
     def __init__(self, output_path: str):
         self.output_path = Path(output_path)
         self._nodes: dict[str, dict] = {}
         self._relationships: list[dict] = []
         self._node_counter = 0
         self._node_id_lookup: dict[str, int] = {}
+        self._lock = threading.Lock()
         logger.info(ls.JSON_INIT.format(path=self.output_path))
 
     def _get_node_id_key(self, label: str, properties: PropertyDict) -> str:
@@ -37,18 +46,22 @@ class JsonFileIngestor:
 
     def ensure_node_batch(self, label: str, properties: PropertyDict) -> None:
         node_key = self._get_node_id_key(label, properties)
-        if not node_key or node_key in self._nodes:
+        if not node_key:
             return
 
-        node_id = self._node_counter
-        self._node_counter += 1
-        self._node_id_lookup[node_key] = node_id
+        with self._lock:
+            if node_key in self._nodes:
+                return
 
-        self._nodes[node_key] = {
-            cs.KEY_NODE_ID: node_id,
-            cs.KEY_LABELS: [label],
-            cs.KEY_PROPERTIES: {k: v for k, v in properties.items() if v is not None},
-        }
+            node_id = self._node_counter
+            self._node_counter += 1
+            self._node_id_lookup[node_key] = node_id
+
+            self._nodes[node_key] = {
+                cs.KEY_NODE_ID: node_id,
+                cs.KEY_LABELS: [label],
+                cs.KEY_PROPERTIES: {k: v for k, v in properties.items() if v is not None},
+            }
 
     def ensure_relationship_batch(
         self,
@@ -63,12 +76,13 @@ class JsonFileIngestor:
         from_node_key = f"{from_label}:{from_val}"
         to_node_key = f"{to_label}:{to_val}"
 
-        self._relationships.append({
-            "from_key": from_node_key,
-            "to_key": to_node_key,
-            cs.KEY_TYPE: rel_type,
-            cs.KEY_PROPERTIES: dict(properties) if properties else {},
-        })
+        with self._lock:
+            self._relationships.append({
+                "from_key": from_node_key,
+                "to_key": to_node_key,
+                cs.KEY_TYPE: rel_type,
+                cs.KEY_PROPERTIES: dict(properties) if properties else {},
+            })
 
     def flush_all(self) -> None:
         logger.info(ls.JSON_FLUSHING.format(path=self.output_path))
