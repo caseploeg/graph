@@ -462,6 +462,12 @@ LANGUAGE_METADATA: dict[SupportedLanguage, LanguageMetadata] = {
     ),
 }
 
+# Languages with FULL support status (for batch processing filtering)
+FULLY_SUPPORTED_LANGUAGES: frozenset[str] = frozenset({
+    lang.value for lang, meta in LANGUAGE_METADATA.items()
+    if meta.status == LanguageStatus.FULL
+})
+
 
 # (H) Tree-sitter AST node type constants
 FUNCTION_NODES_BASIC = ("function_declaration", "function_definition")
