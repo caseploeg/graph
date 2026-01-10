@@ -17,13 +17,16 @@ import pytest
 from .graph_compare import assert_graphs_equal, compare_graphs
 
 
-# Properties that may have non-deterministic values due to parsing order
-# or decorator handling variations
+# Properties that may have non-deterministic values due to parsing order,
+# decorator handling variations, or inline module handling
 VOLATILE_PROPERTIES = {
     "start_line",
     "end_line",
     "decorators",
     "docstring",
+    # Module path/name can differ for inline Rust modules
+    "path",
+    "name",
 }
 
 

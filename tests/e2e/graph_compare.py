@@ -21,16 +21,26 @@ def normalize_graph(graph_data: dict[str, Any]) -> dict[str, Any]:
     Returns:
         Normalized graph with sorted nodes and relationships
     """
-    # Sort nodes by qualified_name (or name for nodes without qualified_name)
-    nodes = sorted(
-        graph_data.get("nodes", []),
-        key=lambda n: (
-            n.get("labels", [""])[0],
-            n.get("properties", {}).get("qualified_name", "")
-            or n.get("properties", {}).get("name", "")
-            or n.get("properties", {}).get("path", ""),
-        ),
-    )
+    def get_sort_key(node: dict[str, Any]) -> tuple[str, str]:
+        """Get a deterministic sort key for a node."""
+        labels = node.get("labels", [""])
+        props = node.get("properties", {})
+        label = labels[0] if labels else ""
+
+        # For File nodes, use path for deterministic ordering
+        # For other nodes, use qualified_name or name
+        if label == "File":
+            identifier = props.get("path", props.get("name", ""))
+        else:
+            identifier = (
+                props.get("qualified_name", "")
+                or props.get("name", "")
+                or props.get("path", "")
+            )
+        return (label, identifier)
+
+    # Sort nodes by label and identifier (path for File nodes, qualified_name for others)
+    nodes = sorted(graph_data.get("nodes", []), key=get_sort_key)
 
     # Sort relationships by (from_key, type, to_key)
     relationships = sorted(
@@ -53,8 +63,17 @@ def get_node_signature(node: dict[str, Any]) -> str:
     """Get a unique signature for a node for diff reporting."""
     labels = node.get("labels", [])
     props = node.get("properties", {})
-    qn = props.get("qualified_name") or props.get("name") or props.get("path", "")
-    return f"{labels[0] if labels else 'UNKNOWN'}:{qn}"
+    label = labels[0] if labels else "UNKNOWN"
+
+    # For File nodes, use path as the primary identifier since names can repeat
+    # For other nodes, prefer qualified_name
+    if label == "File":
+        identifier = props.get("path", props.get("name", ""))
+    else:
+        identifier = (
+            props.get("qualified_name") or props.get("name") or props.get("path", "")
+        )
+    return f"{label}:{identifier}"
 
 
 def get_rel_signature(rel: dict[str, Any]) -> str:
