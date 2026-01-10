@@ -214,10 +214,14 @@ class LargeScaleBatchProcessor:
         results: list[ProcessResult] = []
 
         with ProcessPoolExecutor(max_workers=self.config.workers) as executor:
-            futures = {
-                executor.submit(process_single_repo, args): args[0]
-                for args in args_list
-            }
+            futures = {}
+            # Submit all tasks and mark initial batch as in-progress
+            for args in args_list:
+                future = executor.submit(process_single_repo, args)
+                futures[future] = args[0]
+                # Mark first N repos as in-progress (up to worker count)
+                if self.ui and len(futures) <= self.config.workers:
+                    self.ui.mark_repo_started(str(args[0]))
 
             for future in as_completed(futures):
                 repo_path = futures[future]
@@ -236,9 +240,20 @@ class LargeScaleBatchProcessor:
 
                 results.append(result)
 
-                # Update UI
+                # Update UI - this removes from in-progress
                 if self.ui:
                     self.ui.update_process_progress(result)
+
+                    # Find a pending repo to mark as in-progress
+                    # (a worker just freed up)
+                    completed_paths = {Path(r.repo_path) for r in results}
+                    in_progress_names = set(self.ui.stats.in_progress_repos)
+                    for args in args_list:
+                        if args[0] not in completed_paths:
+                            repo_name = args[0].name
+                            if repo_name not in in_progress_names:
+                                self.ui.mark_repo_started(str(args[0]))
+                                break
 
         self.process_results = results
         return results
