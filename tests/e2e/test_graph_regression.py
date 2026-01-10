@@ -75,8 +75,8 @@ class TestGraphGenerationRegression:
         )
 
 
-# Minimal tolerance for residual non-determinism in call resolution
-# This was reduced from 5 to 1 after deterministic generation improvements
+# Minimal tolerance for residual non-determinism from parallel processing order
+# The semantic comparison (assert_graphs_equal) catches structural differences
 COUNT_TOLERANCE = 1
 
 
