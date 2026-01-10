@@ -23,8 +23,8 @@ from .types_defs import (
     TrieNode,
 )
 from .utils.dependencies import has_semantic_dependencies
+from .utils.file_enumerator import FileEnumerator
 from .utils.fqn_resolver import find_function_source_by_fqn
-from .utils.path_utils import should_skip_path
 from .utils.source_extraction import extract_source_with_fallback
 
 
@@ -160,6 +160,17 @@ class FunctionRegistryTrie:
 
 
 class BoundedASTCache:
+    """
+    LRU cache for AST nodes with memory and entry limits.
+
+    Uses incremental size tracking for O(1) memory checks instead of
+    O(N) sum on every insert. Size is recalibrated periodically to
+    correct for estimation drift.
+    """
+
+    # Recalibrate estimated size every N operations
+    _RECALIBRATE_INTERVAL = 100
+
     def __init__(
         self,
         max_entries: int | None = None,
@@ -174,11 +185,25 @@ class BoundedASTCache:
         )
         self.max_memory_bytes = max_mem * cs.BYTES_PER_MB
 
+        # Incremental size tracking for O(1) memory checks
+        self._estimated_size_bytes = 0
+        self._operations_since_recalibrate = 0
+
     def __setitem__(self, key: Path, value: tuple[Node, cs.SupportedLanguage]) -> None:
+        # Remove old entry if exists (and update size tracking)
         if key in self.cache:
+            old_value = self.cache[key]
+            self._estimated_size_bytes -= sys.getsizeof(old_value)
             del self.cache[key]
 
+        # Add new entry and update size tracking
         self.cache[key] = value
+        self._estimated_size_bytes += sys.getsizeof(value)
+        self._operations_since_recalibrate += 1
+
+        # Periodic recalibration to correct for estimation drift
+        if self._operations_since_recalibrate >= self._RECALIBRATE_INTERVAL:
+            self._recalibrate_size()
 
         self._enforce_limits()
 
@@ -189,6 +214,8 @@ class BoundedASTCache:
 
     def __delitem__(self, key: Path) -> None:
         if key in self.cache:
+            value = self.cache[key]
+            self._estimated_size_bytes -= sys.getsizeof(value)
             del self.cache[key]
 
     def __contains__(self, key: Path) -> bool:
@@ -197,9 +224,20 @@ class BoundedASTCache:
     def items(self) -> ItemsView[Path, tuple[Node, cs.SupportedLanguage]]:
         return self.cache.items()
 
+    def _recalibrate_size(self) -> None:
+        """Recalculate exact size to correct for estimation drift."""
+        try:
+            self._estimated_size_bytes = sum(
+                sys.getsizeof(v) for v in self.cache.values()
+            )
+        except Exception:
+            # If size calculation fails, estimate based on entry count
+            self._estimated_size_bytes = len(self.cache) * 1024  # ~1KB per entry
+        self._operations_since_recalibrate = 0
+
     def _enforce_limits(self) -> None:
         while len(self.cache) > self.max_entries:
-            self.cache.popitem(last=False)  # (H) Remove least recently used
+            self._pop_oldest()
 
         if self._should_evict_for_memory():
             entries_to_remove = max(
@@ -207,17 +245,17 @@ class BoundedASTCache:
             )
             for _ in range(entries_to_remove):
                 if self.cache:
-                    self.cache.popitem(last=False)
+                    self._pop_oldest()
+
+    def _pop_oldest(self) -> None:
+        """Remove oldest entry and update size tracking."""
+        if self.cache:
+            _, value = self.cache.popitem(last=False)
+            self._estimated_size_bytes -= sys.getsizeof(value)
 
     def _should_evict_for_memory(self) -> bool:
-        try:
-            cache_size = sum(sys.getsizeof(v) for v in self.cache.values())
-            return cache_size > self.max_memory_bytes
-        except Exception:
-            return (
-                len(self.cache)
-                > self.max_entries * settings.CACHE_MEMORY_THRESHOLD_RATIO
-            )
+        """Check if memory limit exceeded using O(1) estimated size."""
+        return self._estimated_size_bytes > self.max_memory_bytes
 
 
 class GraphUpdater:
@@ -243,6 +281,9 @@ class GraphUpdater:
         self.include_paths = include_paths
         self.exclude_paths = exclude_paths
 
+        # Single-pass file enumeration for efficiency
+        self.file_enumerator = FileEnumerator(repo_path)
+
         self.factory = ProcessorFactory(
             ingestor=self.ingestor,
             repo_path=self.repo_path,
@@ -267,8 +308,16 @@ class GraphUpdater:
         )
         logger.info(ls.ENSURING_PROJECT.format(name=self.project_name))
 
+        # Single-pass enumeration for both structure and file processing
+        self.file_enumerator.enumerate(
+            exclude_paths=self.exclude_paths,
+            include_paths=self.include_paths,
+        )
+
         logger.info(ls.PASS_1_STRUCTURE)
-        self.factory.structure_processor.identify_structure()
+        self.factory.structure_processor.identify_structure(
+            directories=self.file_enumerator.directories
+        )
 
         logger.info(ls.PASS_2_FILES)
         self._process_files()
@@ -317,34 +366,29 @@ class GraphUpdater:
                 logger.debug(ls.CLEANED_SIMPLE_NAME.format(name=simple_name))
 
     def _process_files(self) -> None:
-        for filepath in sorted(self.repo_path.rglob("*")):
-            if filepath.is_file() and not should_skip_path(
-                filepath,
-                self.repo_path,
-                exclude_paths=self.exclude_paths,
-                include_paths=self.include_paths,
+        # Use pre-enumerated files from FileEnumerator (single rglob)
+        for filepath in self.file_enumerator.files:
+            lang_config = get_language_spec(filepath.suffix)
+            if (
+                lang_config
+                and isinstance(lang_config.language, cs.SupportedLanguage)
+                and lang_config.language in self.parsers
             ):
-                lang_config = get_language_spec(filepath.suffix)
-                if (
-                    lang_config
-                    and isinstance(lang_config.language, cs.SupportedLanguage)
-                    and lang_config.language in self.parsers
-                ):
-                    result = self.factory.definition_processor.process_file(
-                        filepath,
-                        lang_config.language,
-                        self.queries,
-                        self.factory.structure_processor.structural_elements,
-                    )
-                    if result:
-                        root_node, language = result
-                        self.ast_cache[filepath] = (root_node, language)
-                elif self._is_dependency_file(filepath.name, filepath):
-                    self.factory.definition_processor.process_dependencies(filepath)
-
-                self.factory.structure_processor.process_generic_file(
-                    filepath, filepath.name
+                result = self.factory.definition_processor.process_file(
+                    filepath,
+                    lang_config.language,
+                    self.queries,
+                    self.factory.structure_processor.structural_elements,
                 )
+                if result:
+                    root_node, language = result
+                    self.ast_cache[filepath] = (root_node, language)
+            elif self._is_dependency_file(filepath.name, filepath):
+                self.factory.definition_processor.process_dependencies(filepath)
+
+            self.factory.structure_processor.process_generic_file(
+                filepath, filepath.name
+            )
 
     def _process_function_calls(self) -> None:
         ast_cache_items = sorted(self.ast_cache.items(), key=lambda x: str(x[0]))
