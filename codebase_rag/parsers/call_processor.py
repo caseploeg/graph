@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from loguru import logger
@@ -15,6 +16,17 @@ from .cpp import utils as cpp_utils
 from .import_processor import ImportProcessor
 from .type_inference import TypeInferenceEngine
 from .utils import get_function_captures, is_method_node
+
+
+@dataclass
+class CallContext:
+    """Context for a group of calls sharing the same caller."""
+
+    caller_node: Node
+    caller_qn: str
+    caller_type: str
+    class_context: str | None = None
+    call_nodes: list[Node] = field(default_factory=list)
 
 
 class CallProcessor:
@@ -53,6 +65,16 @@ class CallProcessor:
         language: cs.SupportedLanguage,
         queries: dict[cs.SupportedLanguage, LanguageQueries],
     ) -> None:
+        """
+        Process all function calls in a file.
+
+        Uses an optimized approach:
+        1. Collect all functions and classes in one pass each
+        2. Build caller contexts (functions, methods, module)
+        3. Collect all calls in a single pass
+        4. Attribute calls to their containing context
+        5. Process calls grouped by context
+        """
         relative_path = file_path.relative_to(self.repo_path)
         logger.debug(ls.CALL_PROCESSING_FILE.format(path=relative_path))
 
@@ -65,49 +87,240 @@ class CallProcessor:
                     [self.project_name] + list(relative_path.parent.parts)
                 )
 
-            self._process_calls_in_functions(root_node, module_qn, language, queries)
-            self._process_calls_in_classes(root_node, module_qn, language, queries)
-            self._process_module_level_calls(root_node, module_qn, language, queries)
+            # Build all caller contexts
+            contexts = self._build_caller_contexts(
+                root_node, module_qn, language, queries
+            )
+
+            # Collect all calls in a single pass
+            calls_query = queries[language].get(cs.QUERY_CALLS)
+            if not calls_query:
+                return
+
+            cursor = QueryCursor(calls_query)
+            captures = cursor.captures(root_node)
+            all_calls = [n for n in captures.get(cs.CAPTURE_CALL, []) if isinstance(n, Node)]
+
+            # Attribute calls to contexts and process
+            self._attribute_and_process_calls(
+                all_calls, contexts, module_qn, language, queries
+            )
 
         except Exception as e:
             logger.error(ls.CALL_PROCESSING_FAILED.format(path=file_path, error=e))
 
-    def _process_calls_in_functions(
+    def _node_key(self, node: Node) -> tuple[int, int]:
+        """
+        Generate a unique key for a tree-sitter node.
+
+        Uses byte range as identifier since tree-sitter creates new Python
+        wrapper objects for each query, making id() unreliable.
+        """
+        return (node.start_byte, node.end_byte)
+
+    def _build_caller_contexts(
         self,
         root_node: Node,
         module_qn: str,
         language: cs.SupportedLanguage,
         queries: dict[cs.SupportedLanguage, LanguageQueries],
-    ) -> None:
+    ) -> dict[tuple[int, int], CallContext]:
+        """
+        Build a mapping from node position to CallContext for all callers.
+
+        Returns a dict mapping (start_byte, end_byte) to CallContext for:
+        - All standalone functions
+        - All methods within classes
+        - The module itself (root node)
+        """
+        contexts: dict[tuple[int, int], CallContext] = {}
+
+        # Add module context
+        contexts[self._node_key(root_node)] = CallContext(
+            caller_node=root_node,
+            caller_qn=module_qn,
+            caller_type=cs.NodeLabel.MODULE,
+        )
+
+        # Collect functions
         result = get_function_captures(root_node, language, queries)
-        if not result:
-            return
+        if result:
+            lang_config, captures = result
+            for func_node in captures.get(cs.CAPTURE_FUNCTION, []):
+                if not isinstance(func_node, Node):
+                    continue
+                if self._is_method(func_node, lang_config):
+                    continue
 
-        lang_config, captures = result
-        func_nodes = captures.get(cs.CAPTURE_FUNCTION, [])
-        for func_node in func_nodes:
-            if not isinstance(func_node, Node):
-                continue
-            if self._is_method(func_node, lang_config):
+                if language == cs.SupportedLanguage.CPP:
+                    func_name = cpp_utils.extract_function_name(func_node)
+                else:
+                    func_name = self._get_node_name(func_node)
+                if not func_name:
+                    continue
+
+                func_qn = self._build_nested_qualified_name(
+                    func_node, module_qn, func_name, lang_config
+                )
+                if func_qn:
+                    contexts[self._node_key(func_node)] = CallContext(
+                        caller_node=func_node,
+                        caller_qn=func_qn,
+                        caller_type=cs.NodeLabel.FUNCTION,
+                    )
+
+        # Collect classes and their methods
+        class_query = queries[language].get(cs.QUERY_CLASSES)
+        if class_query:
+            cursor = QueryCursor(class_query)
+            captures = cursor.captures(root_node)
+            for class_node in captures.get(cs.CAPTURE_CLASS, []):
+                if not isinstance(class_node, Node):
+                    continue
+                class_name = self._get_class_name_for_node(class_node, language)
+                if not class_name:
+                    continue
+                class_qn = f"{module_qn}{cs.SEPARATOR_DOT}{class_name}"
+
+                body_node = class_node.child_by_field_name(cs.FIELD_BODY)
+                if not body_node:
+                    continue
+
+                # Collect methods in this class
+                method_query = queries[language].get(cs.QUERY_FUNCTIONS)
+                if method_query:
+                    method_cursor = QueryCursor(method_query)
+                    method_captures = method_cursor.captures(body_node)
+                    for method_node in method_captures.get(cs.CAPTURE_FUNCTION, []):
+                        if not isinstance(method_node, Node):
+                            continue
+                        method_name = self._get_node_name(method_node)
+                        if not method_name:
+                            continue
+                        method_qn = f"{class_qn}{cs.SEPARATOR_DOT}{method_name}"
+                        contexts[self._node_key(method_node)] = CallContext(
+                            caller_node=method_node,
+                            caller_qn=method_qn,
+                            caller_type=cs.NodeLabel.METHOD,
+                            class_context=class_qn,
+                        )
+
+        return contexts
+
+    def _attribute_and_process_calls(
+        self,
+        all_calls: list[Node],
+        contexts: dict[tuple[int, int], CallContext],
+        module_qn: str,
+        language: cs.SupportedLanguage,
+        queries: dict[cs.SupportedLanguage, LanguageQueries],
+    ) -> None:
+        """
+        Attribute each call to its containing context and process.
+
+        For each call, walks up the AST to find the nearest containing
+        function/method, then processes the call in that context.
+        """
+        # Group calls by their containing context
+        for call_node in all_calls:
+            context = self._find_containing_context(call_node, contexts)
+            if context:
+                context.call_nodes.append(call_node)
+
+        # Process calls for each context
+        for context in contexts.values():
+            if not context.call_nodes:
                 continue
 
-            if language == cs.SupportedLanguage.CPP:
-                func_name = cpp_utils.extract_function_name(func_node)
-            else:
-                func_name = self._get_node_name(func_node)
-            if not func_name:
-                continue
-            if func_qn := self._build_nested_qualified_name(
-                func_node, module_qn, func_name, lang_config
-            ):
-                self._ingest_function_calls(
-                    func_node,
-                    func_qn,
-                    cs.NodeLabel.FUNCTION,
+            # Build local variable types for this context
+            local_var_types = self._resolver.type_inference.build_local_variable_type_map(
+                context.caller_node, module_qn, language
+            )
+
+            logger.debug(
+                ls.CALL_FOUND_NODES.format(
+                    count=len(context.call_nodes),
+                    language=language,
+                    caller=context.caller_qn,
+                )
+            )
+
+            for call_node in context.call_nodes:
+                self._process_single_call(
+                    call_node,
+                    context,
                     module_qn,
                     language,
-                    queries,
+                    local_var_types,
                 )
+
+    def _find_containing_context(
+        self, call_node: Node, contexts: dict[tuple[int, int], CallContext]
+    ) -> CallContext | None:
+        """
+        Find the innermost context containing this call node.
+
+        Walks up the AST from the call node to find the nearest
+        function/method that contains it.
+        """
+        current = call_node.parent
+        while current is not None:
+            key = self._node_key(current)
+            if key in contexts:
+                return contexts[key]
+            current = current.parent
+        return None
+
+    def _process_single_call(
+        self,
+        call_node: Node,
+        context: CallContext,
+        module_qn: str,
+        language: cs.SupportedLanguage,
+        local_var_types: dict[str, str],
+    ) -> None:
+        """Process a single call node within its context."""
+        call_name = self._get_call_target_name(call_node)
+        if not call_name:
+            return
+
+        if (
+            language == cs.SupportedLanguage.JAVA
+            and call_node.type == cs.TS_METHOD_INVOCATION
+        ):
+            callee_info = self._resolver.resolve_java_method_call(
+                call_node, module_qn, local_var_types
+            )
+        else:
+            callee_info = self._resolver.resolve_function_call(
+                call_name, module_qn, local_var_types, context.class_context
+            )
+
+        if callee_info:
+            callee_type, callee_qn = callee_info
+        elif builtin_info := self._resolver.resolve_builtin_call(call_name):
+            callee_type, callee_qn = builtin_info
+        elif operator_info := self._resolver.resolve_cpp_operator_call(
+            call_name, module_qn
+        ):
+            callee_type, callee_qn = operator_info
+        else:
+            return
+
+        logger.debug(
+            ls.CALL_FOUND.format(
+                caller=context.caller_qn,
+                call_name=call_name,
+                callee_type=callee_type,
+                callee_qn=callee_qn,
+            )
+        )
+
+        self.ingestor.ensure_relationship_batch(
+            (context.caller_type, cs.KEY_QUALIFIED_NAME, context.caller_qn),
+            cs.RelationshipType.CALLS,
+            (callee_type, cs.KEY_QUALIFIED_NAME, callee_qn),
+        )
 
     def _get_rust_impl_class_name(self, class_node: Node) -> str | None:
         class_name = self._get_node_name(class_node, cs.FIELD_TYPE)
@@ -128,74 +341,6 @@ class CallProcessor:
         if language == cs.SupportedLanguage.RUST and class_node.type == cs.TS_IMPL_ITEM:
             return self._get_rust_impl_class_name(class_node)
         return self._get_node_name(class_node)
-
-    def _process_methods_in_class(
-        self,
-        body_node: Node,
-        class_qn: str,
-        module_qn: str,
-        language: cs.SupportedLanguage,
-        queries: dict[cs.SupportedLanguage, LanguageQueries],
-    ) -> None:
-        method_query = queries[language][cs.QUERY_FUNCTIONS]
-        if not method_query:
-            return
-        method_cursor = QueryCursor(method_query)
-        method_captures = method_cursor.captures(body_node)
-        method_nodes = method_captures.get(cs.CAPTURE_FUNCTION, [])
-        for method_node in method_nodes:
-            if not isinstance(method_node, Node):
-                continue
-            method_name = self._get_node_name(method_node)
-            if not method_name:
-                continue
-            method_qn = f"{class_qn}{cs.SEPARATOR_DOT}{method_name}"
-            self._ingest_function_calls(
-                method_node,
-                method_qn,
-                cs.NodeLabel.METHOD,
-                module_qn,
-                language,
-                queries,
-                class_qn,
-            )
-
-    def _process_calls_in_classes(
-        self,
-        root_node: Node,
-        module_qn: str,
-        language: cs.SupportedLanguage,
-        queries: dict[cs.SupportedLanguage, LanguageQueries],
-    ) -> None:
-        query = queries[language][cs.QUERY_CLASSES]
-        if not query:
-            return
-        cursor = QueryCursor(query)
-        captures = cursor.captures(root_node)
-        class_nodes = captures.get(cs.CAPTURE_CLASS, [])
-
-        for class_node in class_nodes:
-            if not isinstance(class_node, Node):
-                continue
-            class_name = self._get_class_name_for_node(class_node, language)
-            if not class_name:
-                continue
-            class_qn = f"{module_qn}{cs.SEPARATOR_DOT}{class_name}"
-            if body_node := class_node.child_by_field_name(cs.FIELD_BODY):
-                self._process_methods_in_class(
-                    body_node, class_qn, module_qn, language, queries
-                )
-
-    def _process_module_level_calls(
-        self,
-        root_node: Node,
-        module_qn: str,
-        language: cs.SupportedLanguage,
-        queries: dict[cs.SupportedLanguage, LanguageQueries],
-    ) -> None:
-        self._ingest_function_calls(
-            root_node, module_qn, cs.NodeLabel.MODULE, module_qn, language, queries
-        )
 
     def _get_call_target_name(self, call_node: Node) -> str | None:
         if func_child := call_node.child_by_field_name(cs.TS_FIELD_FUNCTION):
@@ -250,80 +395,6 @@ class CallProcessor:
                 case cs.TS_ARROW_FUNCTION:
                     return f"{cs.IIFE_ARROW_PREFIX}{child.start_point[0]}_{child.start_point[1]}"
         return None
-
-    def _ingest_function_calls(
-        self,
-        caller_node: Node,
-        caller_qn: str,
-        caller_type: str,
-        module_qn: str,
-        language: cs.SupportedLanguage,
-        queries: dict[cs.SupportedLanguage, LanguageQueries],
-        class_context: str | None = None,
-    ) -> None:
-        calls_query = queries[language].get(cs.QUERY_CALLS)
-        if not calls_query:
-            return
-
-        local_var_types = self._resolver.type_inference.build_local_variable_type_map(
-            caller_node, module_qn, language
-        )
-
-        cursor = QueryCursor(calls_query)
-        captures = cursor.captures(caller_node)
-        call_nodes = captures.get(cs.CAPTURE_CALL, [])
-
-        logger.debug(
-            ls.CALL_FOUND_NODES.format(
-                count=len(call_nodes), language=language, caller=caller_qn
-            )
-        )
-
-        for call_node in call_nodes:
-            if not isinstance(call_node, Node):
-                continue
-
-            # (H) tree-sitter finds ALL call nodes including nested; no recursive processing needed
-
-            call_name = self._get_call_target_name(call_node)
-            if not call_name:
-                continue
-
-            if (
-                language == cs.SupportedLanguage.JAVA
-                and call_node.type == cs.TS_METHOD_INVOCATION
-            ):
-                callee_info = self._resolver.resolve_java_method_call(
-                    call_node, module_qn, local_var_types
-                )
-            else:
-                callee_info = self._resolver.resolve_function_call(
-                    call_name, module_qn, local_var_types, class_context
-                )
-            if callee_info:
-                callee_type, callee_qn = callee_info
-            elif builtin_info := self._resolver.resolve_builtin_call(call_name):
-                callee_type, callee_qn = builtin_info
-            elif operator_info := self._resolver.resolve_cpp_operator_call(
-                call_name, module_qn
-            ):
-                callee_type, callee_qn = operator_info
-            else:
-                continue
-            logger.debug(
-                ls.CALL_FOUND.format(
-                    caller=caller_qn,
-                    call_name=call_name,
-                    callee_type=callee_type,
-                    callee_qn=callee_qn,
-                )
-            )
-
-            self.ingestor.ensure_relationship_batch(
-                (caller_type, cs.KEY_QUALIFIED_NAME, caller_qn),
-                cs.RelationshipType.CALLS,
-                (callee_type, cs.KEY_QUALIFIED_NAME, callee_qn),
-            )
 
     def _build_nested_qualified_name(
         self,
