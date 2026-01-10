@@ -162,13 +162,19 @@ uv run python batch/large_scale_processor.py \
 | `--shallow` | Use shallow clones (default: True) |
 | `--max-retries` | Max clone retries per repo (default: 3) |
 | `--generate-questions` | Generate questions after processing |
+| `--questions-only` | Skip clone/process, only generate questions |
 | `--questions-dir` | Directory for question JSONL files |
 | `--target-questions` | Target questions per repo (default: 10000) |
 | `--min-questions` | Minimum candidates to generate (default: 10) |
+| `--question-workers` | Workers for parallel question generation |
 
 ## Question Generation
 
-Generate diverse evaluation questions alongside graphs:
+Generate diverse evaluation questions for processed repos. Question generation runs in parallel across repos for maximum throughput.
+
+### Full Pipeline with Questions
+
+Generate graphs and questions in one run:
 
 ```bash
 uv run python batch/large_scale_processor.py \
@@ -176,8 +182,50 @@ uv run python batch/large_scale_processor.py \
     --clone-dir ./clones \
     --output-dir ./graphs \
     --generate-questions \
+    --question-workers 8 \
     --target-questions 10000
 ```
+
+### Questions-Only Mode
+
+If you already have graphs and clones, skip straight to question generation:
+
+```bash
+uv run python batch/large_scale_processor.py \
+    --questions-only \
+    --clone-dir ./clones \
+    --output-dir ./graphs \
+    --questions-dir ./questions \
+    --question-workers 8 \
+    --repo-list repos.json
+```
+
+This is useful for:
+- Re-generating questions with different parameters
+- Running question generation after a previous batch run
+- Testing question generation without re-processing repos
+
+### Standalone Question Generator
+
+Use the standalone script for maximum flexibility:
+
+```bash
+uv run python batch/batch_question_generator.py \
+    --graphs-dir ./graphs \
+    --clones-dir ./clones \
+    --questions-dir ./questions \
+    --target-per-repo 10000 \
+    --workers 8
+```
+
+### Parallel Processing
+
+Question generation processes multiple repos in parallel using ProcessPoolExecutor:
+
+- Default workers: `cpu_count - 2`
+- Override with `--question-workers` (large_scale_processor) or `--workers` (batch_question_generator)
+- Each worker processes one repo at a time
+- Progress is shown as repos complete
 
 ### How It Works
 
@@ -186,17 +234,16 @@ uv run python batch/large_scale_processor.py \
 3. Repos with fewer than `--min-questions` candidates are skipped
 4. Questions use various expansion strategies (callees, callers, chain, file, bfs)
 
-### Standalone Question Generation
+### Question Generation Options
 
-If you already have graphs, generate questions separately:
-
-```bash
-uv run python batch/batch_question_generator.py \
-    --graphs-dir ./graphs \
-    --clones-dir ./clones \
-    --questions-dir ./questions \
-    --target-per-repo 10000
-```
+| Flag | Description |
+|------|-------------|
+| `--generate-questions` | Enable question generation (full pipeline) |
+| `--questions-only` | Skip clone/process, only generate questions |
+| `--questions-dir` | Output directory for JSONL files |
+| `--target-questions` | Target questions per repo (default: 10000) |
+| `--min-questions` | Minimum candidates required (default: 10) |
+| `--question-workers` | Parallel workers for question generation |
 
 ### Question Output Structure
 
