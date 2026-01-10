@@ -88,6 +88,8 @@ class NodeTextExtractor:
     def __init__(self, graph_path: str | Path, repo_base_path: str | Path):
         self.graph_loader = GraphLoader(str(graph_path))
         self.repo_base_path = Path(repo_base_path).resolve()
+        # File cache to avoid reading the same file multiple times
+        self._file_cache: dict[str, str | None] = {}
 
     def _get_node_category(self, node: GraphNode) -> str:
         labels = set(node.labels)
@@ -138,10 +140,20 @@ class NodeTextExtractor:
         return self.repo_base_path / str(rel_path)
 
     def _read_file(self, file_path: Path) -> str | None:
+        # Use cached content if available
+        cache_key = str(file_path)
+        if cache_key in self._file_cache:
+            return self._file_cache[cache_key]
+
+        # Read and cache
         if not file_path.exists():
             logger.warning("File not found: {}", file_path)
+            self._file_cache[cache_key] = None
             return None
-        return file_path.read_text(encoding=cs.ENCODING_UTF8)
+
+        content = file_path.read_text(encoding=cs.ENCODING_UTF8)
+        self._file_cache[cache_key] = content
+        return content
 
     def _extract_lines(self, content: str, start_line: int, end_line: int) -> str:
         lines = content.splitlines()
