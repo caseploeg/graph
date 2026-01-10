@@ -1,0 +1,804 @@
+{
+  "nodes": [
+    {
+      "node_id": 0,
+      "labels": [
+        "Project"
+      ],
+      "properties": {
+        "name": "log"
+      }
+    },
+    {
+      "node_id": 1,
+      "labels": [
+        "Folder"
+      ],
+      "properties": {
+        "path": ".github",
+        "name": ".github"
+      }
+    },
+    {
+      "node_id": 2,
+      "labels": [
+        "Folder"
+      ],
+      "properties": {
+        "path": ".github/workflows",
+        "name": "workflows"
+      }
+    },
+    {
+      "node_id": 3,
+      "labels": [
+        "Folder"
+      ],
+      "properties": {
+        "path": "benches",
+        "name": "benches"
+      }
+    },
+    {
+      "node_id": 4,
+      "labels": [
+        "Folder"
+      ],
+      "properties": {
+        "path": "rfcs",
+        "name": "rfcs"
+      }
+    },
+    {
+      "node_id": 5,
+      "labels": [
+        "Folder"
+      ],
+      "properties": {
+        "path": "src",
+        "name": "src"
+      }
+    },
+    {
+      "node_id": 6,
+      "labels": [
+        "Folder"
+      ],
+      "properties": {
+        "path": "src/kv",
+        "name": "kv"
+      }
+    },
+    {
+      "node_id": 7,
+      "labels": [
+        "Folder"
+      ],
+      "properties": {
+        "path": "test_max_level_features",
+        "name": "test_max_level_features"
+      }
+    },
+    {
+      "node_id": 8,
+      "labels": [
+        "Folder"
+      ],
+      "properties": {
+        "path": "tests",
+        "name": "tests"
+      }
+    },
+    {
+      "node_id": 9,
+      "labels": [
+        "Folder"
+      ],
+      "properties": {
+        "path": "tests/src",
+        "name": "src"
+      }
+    },
+    {
+      "node_id": 10,
+      "labels": [
+        "ExternalPackage"
+      ],
+      "properties": {
+        "name": "serde"
+      }
+    },
+    {
+      "node_id": 11,
+      "labels": [
+        "ExternalPackage"
+      ],
+      "properties": {
+        "name": "sval"
+      }
+    },
+    {
+      "node_id": 12,
+      "labels": [
+        "ExternalPackage"
+      ],
+      "properties": {
+        "name": "sval_ref"
+      }
+    },
+    {
+      "node_id": 13,
+      "labels": [
+        "ExternalPackage"
+      ],
+      "properties": {
+        "name": "value-bag"
+      }
+    },
+    {
+      "node_id": 14,
+      "labels": [
+        "ExternalPackage"
+      ],
+      "properties": {
+        "name": "serde_json"
+      }
+    },
+    {
+      "node_id": 15,
+      "labels": [
+        "ExternalPackage"
+      ],
+      "properties": {
+        "name": "serde_test"
+      }
+    },
+    {
+      "node_id": 16,
+      "labels": [
+        "ExternalPackage"
+      ],
+      "properties": {
+        "name": "sval_derive"
+      }
+    },
+    {
+      "node_id": 17,
+      "labels": [
+        "ExternalPackage"
+      ],
+      "properties": {
+        "name": "proc-macro2"
+      }
+    },
+    {
+      "node_id": 18,
+      "labels": [
+        "File"
+      ],
+      "properties": {
+        "path": "Cargo.toml",
+        "name": "Cargo.toml",
+        "extension": ".toml"
+      }
+    },
+    {
+      "node_id": 19,
+      "labels": [
+        "File"
+      ],
+      "properties": {
+        "path": "LICENSE-APACHE",
+        "name": "LICENSE-APACHE",
+        "extension": ""
+      }
+    },
+    {
+      "node_id": 20,
+      "labels": [
+        "File"
+      ],
+      "properties": {
+        "path": "triagebot.toml",
+        "name": "triagebot.toml",
+        "extension": ".toml"
+      }
+    },
+    {
+      "node_id": 21,
+      "labels": [
+        "File"
+      ],
+      "properties": {
+        "path": "CHANGELOG.md",
+        "name": "CHANGELOG.md",
+        "extension": ".md"
+      }
+    },
+    {
+      "node_id": 22,
+      "labels": [
+        "File"
+      ],
+      "properties": {
+        "path": "README.md",
+        "name": "README.md",
+        "extension": ".md"
+      }
+    },
+    {
+      "node_id": 23,
+      "labels": [
+        "File"
+      ],
+      "properties": {
+        "path": ".gitignore",
+        "name": ".gitignore",
+        "extension": ""
+      }
+    },
+    {
+      "node_id": 24,
+      "labels": [
+        "File"
+      ],
+      "properties": {
+        "path": "LICENSE-MIT",
+        "name": "LICENSE-MIT",
+        "extension": ""
+      }
+    },
+    {
+      "node_id": 25,
+      "labels": [
+        "ExternalPackage"
+      ],
+      "properties": {
+        "name": "log"
+      }
+    },
+    {
+      "node_id": 26,
+      "labels": [
+        "File"
+      ],
+      "properties": {
+        "path": "test_max_level_features/Cargo.toml",
+        "name": "Cargo.toml",
+        "extension": ".toml"
+      }
+    },
+    {
+      "node_id": 27,
+      "labels": [
+        "File"
+      ],
+      "properties": {
+        "path": "test_max_level_features/main.rs",
+        "name": "main.rs",
+        "extension": ".rs"
+      }
+    },
+    {
+      "node_id": 28,
+      "labels": [
+        "ExternalPackage"
+      ],
+      "properties": {
+        "name": "rustversion"
+      }
+    },
+    {
+      "node_id": 29,
+      "labels": [
+        "File"
+      ],
+      "properties": {
+        "path": "tests/Cargo.toml",
+        "name": "Cargo.toml",
+        "extension": ".toml"
+      }
+    },
+    {
+      "node_id": 30,
+      "labels": [
+        "File"
+      ],
+      "properties": {
+        "path": "tests/macros.rs",
+        "name": "macros.rs",
+        "extension": ".rs"
+      }
+    },
+    {
+      "node_id": 31,
+      "labels": [
+        "File"
+      ],
+      "properties": {
+        "path": "tests/integration.rs",
+        "name": "integration.rs",
+        "extension": ".rs"
+      }
+    },
+    {
+      "node_id": 32,
+      "labels": [
+        "File"
+      ],
+      "properties": {
+        "path": "rfcs/0296-structured-logging.md",
+        "name": "0296-structured-logging.md",
+        "extension": ".md"
+      }
+    },
+    {
+      "node_id": 33,
+      "labels": [
+        "File"
+      ],
+      "properties": {
+        "path": "benches/value.rs",
+        "name": "value.rs",
+        "extension": ".rs"
+      }
+    },
+    {
+      "node_id": 34,
+      "labels": [
+        "File"
+      ],
+      "properties": {
+        "path": "src/serde.rs",
+        "name": "serde.rs",
+        "extension": ".rs"
+      }
+    },
+    {
+      "node_id": 35,
+      "labels": [
+        "File"
+      ],
+      "properties": {
+        "path": "src/__private_api.rs",
+        "name": "__private_api.rs",
+        "extension": ".rs"
+      }
+    },
+    {
+      "node_id": 36,
+      "labels": [
+        "File"
+      ],
+      "properties": {
+        "path": "src/lib.rs",
+        "name": "lib.rs",
+        "extension": ".rs"
+      }
+    },
+    {
+      "node_id": 37,
+      "labels": [
+        "File"
+      ],
+      "properties": {
+        "path": "src/macros.rs",
+        "name": "macros.rs",
+        "extension": ".rs"
+      }
+    },
+    {
+      "node_id": 38,
+      "labels": [
+        "File"
+      ],
+      "properties": {
+        "path": "tests/src/lib.rs",
+        "name": "lib.rs",
+        "extension": ".rs"
+      }
+    },
+    {
+      "node_id": 39,
+      "labels": [
+        "File"
+      ],
+      "properties": {
+        "path": "tests/src/build.rs",
+        "name": "build.rs",
+        "extension": ".rs"
+      }
+    },
+    {
+      "node_id": 40,
+      "labels": [
+        "File"
+      ],
+      "properties": {
+        "path": ".github/workflows/main.yml",
+        "name": "main.yml",
+        "extension": ".yml"
+      }
+    },
+    {
+      "node_id": 41,
+      "labels": [
+        "File"
+      ],
+      "properties": {
+        "path": "src/kv/key.rs",
+        "name": "key.rs",
+        "extension": ".rs"
+      }
+    },
+    {
+      "node_id": 42,
+      "labels": [
+        "File"
+      ],
+      "properties": {
+        "path": "src/kv/error.rs",
+        "name": "error.rs",
+        "extension": ".rs"
+      }
+    },
+    {
+      "node_id": 43,
+      "labels": [
+        "File"
+      ],
+      "properties": {
+        "path": "src/kv/source.rs",
+        "name": "source.rs",
+        "extension": ".rs"
+      }
+    },
+    {
+      "node_id": 44,
+      "labels": [
+        "File"
+      ],
+      "properties": {
+        "path": "src/kv/mod.rs",
+        "name": "mod.rs",
+        "extension": ".rs"
+      }
+    },
+    {
+      "node_id": 45,
+      "labels": [
+        "File"
+      ],
+      "properties": {
+        "path": "src/kv/value.rs",
+        "name": "value.rs",
+        "extension": ".rs"
+      }
+    }
+  ],
+  "relationships": [
+    {
+      "from_id": 0,
+      "to_id": 1,
+      "type": "CONTAINS_FOLDER",
+      "properties": {}
+    },
+    {
+      "from_id": 1,
+      "to_id": 2,
+      "type": "CONTAINS_FOLDER",
+      "properties": {}
+    },
+    {
+      "from_id": 0,
+      "to_id": 3,
+      "type": "CONTAINS_FOLDER",
+      "properties": {}
+    },
+    {
+      "from_id": 0,
+      "to_id": 4,
+      "type": "CONTAINS_FOLDER",
+      "properties": {}
+    },
+    {
+      "from_id": 0,
+      "to_id": 5,
+      "type": "CONTAINS_FOLDER",
+      "properties": {}
+    },
+    {
+      "from_id": 5,
+      "to_id": 6,
+      "type": "CONTAINS_FOLDER",
+      "properties": {}
+    },
+    {
+      "from_id": 0,
+      "to_id": 7,
+      "type": "CONTAINS_FOLDER",
+      "properties": {}
+    },
+    {
+      "from_id": 0,
+      "to_id": 8,
+      "type": "CONTAINS_FOLDER",
+      "properties": {}
+    },
+    {
+      "from_id": 8,
+      "to_id": 9,
+      "type": "CONTAINS_FOLDER",
+      "properties": {}
+    },
+    {
+      "from_id": 0,
+      "to_id": 10,
+      "type": "DEPENDS_ON_EXTERNAL",
+      "properties": {
+        "version_spec": "1.0"
+      }
+    },
+    {
+      "from_id": 0,
+      "to_id": 11,
+      "type": "DEPENDS_ON_EXTERNAL",
+      "properties": {
+        "version_spec": "2.1"
+      }
+    },
+    {
+      "from_id": 0,
+      "to_id": 12,
+      "type": "DEPENDS_ON_EXTERNAL",
+      "properties": {
+        "version_spec": "2.1"
+      }
+    },
+    {
+      "from_id": 0,
+      "to_id": 13,
+      "type": "DEPENDS_ON_EXTERNAL",
+      "properties": {
+        "version_spec": "1.7"
+      }
+    },
+    {
+      "from_id": 0,
+      "to_id": 10,
+      "type": "DEPENDS_ON_EXTERNAL",
+      "properties": {
+        "version_spec": "1.0"
+      }
+    },
+    {
+      "from_id": 0,
+      "to_id": 14,
+      "type": "DEPENDS_ON_EXTERNAL",
+      "properties": {
+        "version_spec": "1.0"
+      }
+    },
+    {
+      "from_id": 0,
+      "to_id": 15,
+      "type": "DEPENDS_ON_EXTERNAL",
+      "properties": {
+        "version_spec": "1.0"
+      }
+    },
+    {
+      "from_id": 0,
+      "to_id": 11,
+      "type": "DEPENDS_ON_EXTERNAL",
+      "properties": {
+        "version_spec": "2.1"
+      }
+    },
+    {
+      "from_id": 0,
+      "to_id": 16,
+      "type": "DEPENDS_ON_EXTERNAL",
+      "properties": {
+        "version_spec": "2.1"
+      }
+    },
+    {
+      "from_id": 0,
+      "to_id": 13,
+      "type": "DEPENDS_ON_EXTERNAL",
+      "properties": {
+        "version_spec": "1.7"
+      }
+    },
+    {
+      "from_id": 0,
+      "to_id": 17,
+      "type": "DEPENDS_ON_EXTERNAL",
+      "properties": {
+        "version_spec": "1.0.63"
+      }
+    },
+    {
+      "from_id": 0,
+      "to_id": 18,
+      "type": "CONTAINS_FILE",
+      "properties": {}
+    },
+    {
+      "from_id": 0,
+      "to_id": 19,
+      "type": "CONTAINS_FILE",
+      "properties": {}
+    },
+    {
+      "from_id": 0,
+      "to_id": 20,
+      "type": "CONTAINS_FILE",
+      "properties": {}
+    },
+    {
+      "from_id": 0,
+      "to_id": 21,
+      "type": "CONTAINS_FILE",
+      "properties": {}
+    },
+    {
+      "from_id": 0,
+      "to_id": 22,
+      "type": "CONTAINS_FILE",
+      "properties": {}
+    },
+    {
+      "from_id": 0,
+      "to_id": 23,
+      "type": "CONTAINS_FILE",
+      "properties": {}
+    },
+    {
+      "from_id": 0,
+      "to_id": 24,
+      "type": "CONTAINS_FILE",
+      "properties": {}
+    },
+    {
+      "from_id": 0,
+      "to_id": 25,
+      "type": "DEPENDS_ON_EXTERNAL",
+      "properties": {}
+    },
+    {
+      "from_id": 7,
+      "to_id": 26,
+      "type": "CONTAINS_FILE",
+      "properties": {}
+    },
+    {
+      "from_id": 7,
+      "to_id": 27,
+      "type": "CONTAINS_FILE",
+      "properties": {}
+    },
+    {
+      "from_id": 0,
+      "to_id": 25,
+      "type": "DEPENDS_ON_EXTERNAL",
+      "properties": {}
+    },
+    {
+      "from_id": 0,
+      "to_id": 28,
+      "type": "DEPENDS_ON_EXTERNAL",
+      "properties": {
+        "version_spec": "1.0"
+      }
+    },
+    {
+      "from_id": 8,
+      "to_id": 29,
+      "type": "CONTAINS_FILE",
+      "properties": {}
+    },
+    {
+      "from_id": 8,
+      "to_id": 30,
+      "type": "CONTAINS_FILE",
+      "properties": {}
+    },
+    {
+      "from_id": 8,
+      "to_id": 31,
+      "type": "CONTAINS_FILE",
+      "properties": {}
+    },
+    {
+      "from_id": 4,
+      "to_id": 32,
+      "type": "CONTAINS_FILE",
+      "properties": {}
+    },
+    {
+      "from_id": 3,
+      "to_id": 33,
+      "type": "CONTAINS_FILE",
+      "properties": {}
+    },
+    {
+      "from_id": 5,
+      "to_id": 34,
+      "type": "CONTAINS_FILE",
+      "properties": {}
+    },
+    {
+      "from_id": 5,
+      "to_id": 35,
+      "type": "CONTAINS_FILE",
+      "properties": {}
+    },
+    {
+      "from_id": 5,
+      "to_id": 36,
+      "type": "CONTAINS_FILE",
+      "properties": {}
+    },
+    {
+      "from_id": 5,
+      "to_id": 37,
+      "type": "CONTAINS_FILE",
+      "properties": {}
+    },
+    {
+      "from_id": 9,
+      "to_id": 38,
+      "type": "CONTAINS_FILE",
+      "properties": {}
+    },
+    {
+      "from_id": 9,
+      "to_id": 39,
+      "type": "CONTAINS_FILE",
+      "properties": {}
+    },
+    {
+      "from_id": 2,
+      "to_id": 40,
+      "type": "CONTAINS_FILE",
+      "properties": {}
+    },
+    {
+      "from_id": 6,
+      "to_id": 41,
+      "type": "CONTAINS_FILE",
+      "properties": {}
+    },
+    {
+      "from_id": 6,
+      "to_id": 42,
+      "type": "CONTAINS_FILE",
+      "properties": {}
+    },
+    {
+      "from_id": 6,
+      "to_id": 43,
+      "type": "CONTAINS_FILE",
+      "properties": {}
+    },
+    {
+      "from_id": 6,
+      "to_id": 44,
+      "type": "CONTAINS_FILE",
+      "properties": {}
+    },
+    {
+      "from_id": 6,
+      "to_id": 45,
+      "type": "CONTAINS_FILE",
+      "properties": {}
+    }
+  ],
+  "metadata": {
+    "total_nodes": 46,
+    "total_relationships": 49,
+    "exported_at": "2026-01-10T21:34:18.032942+00:00"
+  }
+}
