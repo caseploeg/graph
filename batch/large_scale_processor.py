@@ -57,6 +57,8 @@ class LargeScaleConfig:
     questions_dir: Path | None = None
     target_questions_per_repo: int = 10000
     min_questions: int = 10
+    questions_only: bool = False  # Skip clone/process, only generate questions
+    question_workers: int | None = None  # Workers for question generation (default: auto)
 
 
 @dataclass
@@ -259,10 +261,7 @@ class LargeScaleBatchProcessor:
         return results
 
     def questions_phase(self) -> list[dict]:
-        """Generate questions for all processed repos."""
-        if not self.config.generate_questions:
-            return []
-
+        """Generate questions for all processed repos in parallel."""
         from batch.batch_question_generator import batch_generate_questions
 
         questions_dir = self.config.questions_dir or (self.config.output_dir.parent / "questions")
@@ -278,9 +277,29 @@ class LargeScaleBatchProcessor:
             questions_dir=questions_dir,
             target_per_repo=self.config.target_questions_per_repo,
             min_questions=self.config.min_questions,
+            workers=self.config.question_workers,
         )
 
         return results
+
+    def run_questions_only(self) -> None:
+        """Run question generation only on existing graphs."""
+        # Validate directories exist
+        if not self.config.output_dir.exists():
+            print(f"Error: Output directory not found: {self.config.output_dir}")
+            sys.exit(1)
+        if not self.config.clone_dir.exists():
+            print(f"Error: Clone directory not found: {self.config.clone_dir}")
+            sys.exit(1)
+
+        print("=" * 60)
+        print("QUESTIONS-ONLY MODE")
+        print("=" * 60)
+        print(f"Graphs dir:   {self.config.output_dir}")
+        print(f"Clones dir:   {self.config.clone_dir}")
+        print(f"Workers:      {self.config.question_workers or 'auto'}")
+
+        self.questions_phase()
 
     def upload_phase(self) -> list[str]:
         """Upload results to destination."""
@@ -345,6 +364,24 @@ class LargeScaleBatchProcessor:
 
     def run(self) -> BatchSummary:
         """Run the full pipeline."""
+        # Handle questions-only mode
+        if self.config.questions_only:
+            self.run_questions_only()
+            # Return a minimal summary for questions-only mode
+            return BatchSummary(
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                total_repos=0,
+                cloned=0,
+                clone_failed=0,
+                processed=0,
+                process_failed=0,
+                total_nodes=0,
+                total_relationships=0,
+                total_time_seconds=0,
+                workers=self.config.question_workers or get_optimal_workers(),
+                config={"questions_only": True},
+            )
+
         start_time = time.time()
 
         # Load repos
@@ -483,6 +520,11 @@ def main() -> None:
         help="Generate questions after graph processing",
     )
     parser.add_argument(
+        "--questions-only",
+        action="store_true",
+        help="Skip clone/process, generate questions for existing graphs",
+    )
+    parser.add_argument(
         "--questions-dir",
         type=Path,
         default=None,
@@ -500,13 +542,29 @@ def main() -> None:
         default=10,
         help="Minimum candidates to generate questions (default: 10)",
     )
+    parser.add_argument(
+        "--question-workers",
+        type=int,
+        default=None,
+        help=f"Workers for question generation (default: cpu_count - 2 = {get_optimal_workers()})",
+    )
 
     args = parser.parse_args()
 
     # Validate inputs
-    if not args.repo_list.exists():
-        print(f"Error: Repo list not found: {args.repo_list}")
-        sys.exit(1)
+    if args.questions_only:
+        # Questions-only mode: validate directories exist
+        if not args.output_dir.exists():
+            print(f"Error: Output directory not found: {args.output_dir}")
+            sys.exit(1)
+        if not args.clone_dir.exists():
+            print(f"Error: Clone directory not found: {args.clone_dir}")
+            sys.exit(1)
+    else:
+        # Normal mode: validate repo list exists
+        if not args.repo_list.exists():
+            print(f"Error: Repo list not found: {args.repo_list}")
+            sys.exit(1)
 
     # Parse languages
     languages = None
@@ -530,24 +588,31 @@ def main() -> None:
         questions_dir=args.questions_dir,
         target_questions_per_repo=args.target_questions,
         min_questions=args.min_questions,
+        questions_only=args.questions_only,
+        question_workers=args.question_workers,
     )
 
     print("=" * 60)
-    print("Large-Scale Batch Processor")
+    if config.questions_only:
+        print("Large-Scale Batch Processor (Questions-Only Mode)")
+    else:
+        print("Large-Scale Batch Processor")
     print("=" * 60)
     print(f"Repo list:   {config.repo_list_json}")
     print(f"Clone dir:   {config.clone_dir}")
     print(f"Output dir:  {config.output_dir}")
-    print(f"Workers:     {config.workers}")
-    print(f"Resume:      {config.resume}")
-    print(f"Skip clone:  {config.skip_clone}")
+    if not config.questions_only:
+        print(f"Workers:     {config.workers}")
+        print(f"Resume:      {config.resume}")
+        print(f"Skip clone:  {config.skip_clone}")
     if config.languages:
         print(f"Languages:   {', '.join(config.languages)}")
     if config.limit:
         print(f"Limit:       {config.limit}")
-    if config.generate_questions:
+    if config.generate_questions or config.questions_only:
         print(f"Questions:   {config.target_questions_per_repo}/repo (min {config.min_questions} candidates)")
         print(f"Q. output:   {config.questions_dir or 'auto'}")
+        print(f"Q. workers:  {config.question_workers or 'auto'}")
     print("=" * 60)
     print()
 

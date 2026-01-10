@@ -142,14 +142,26 @@ def generate_diverse_prompts(
     weights: dict[str, int] | None = None,
     max_tokens: int = 8000,
     random_seed: int | None = None,
+    quiet: bool = False,
 ) -> list[DiversePromptRecord]:
     """Generate prompts with strategy rotation for diversity.
+
+    Args:
+        graph_path: Path to the graph JSON file
+        repo_path: Path to the repository
+        num_prompts: Number of prompts to generate
+        repo_name: Optional repo name override
+        weights: Strategy weights (default: STRATEGY_WEIGHTS)
+        max_tokens: Maximum tokens for context
+        random_seed: Optional random seed for reproducibility
+        quiet: Suppress verbose output (for parallel workers)
 
     Returns list of DiversePromptRecord objects with rich metadata.
     """
     if random_seed is not None:
         random.seed(random_seed)
-        print(f"Using random seed: {random_seed}", file=sys.stderr)
+        if not quiet:
+            print(f"Using random seed: {random_seed}", file=sys.stderr)
 
     if weights is None:
         weights = STRATEGY_WEIGHTS.copy()
@@ -158,21 +170,27 @@ def generate_diverse_prompts(
     if repo_name is None:
         repo_name = repo_path.name
     primary_language = detect_primary_language(repo_path)
-    print(f"Repository: {repo_name}", file=sys.stderr)
-    print(f"Primary language: {primary_language}", file=sys.stderr)
+
+    if not quiet:
+        print(f"Repository: {repo_name}", file=sys.stderr)
+        print(f"Primary language: {primary_language}", file=sys.stderr)
 
     strategy_queue = build_strategy_queue(weights)
-    print(f"Strategy queue (first 20): {strategy_queue[:20]}", file=sys.stderr)
-    print(f"Total weight sum: {sum(weights.values())}", file=sys.stderr)
-    print(file=sys.stderr)
+
+    if not quiet:
+        print(f"Strategy queue (first 20): {strategy_queue[:20]}", file=sys.stderr)
+        print(f"Total weight sum: {sum(weights.values())}", file=sys.stderr)
+        print(file=sys.stderr)
 
     graph = GraphLoader(str(graph_path))
     graph.load()
 
     all_candidates = get_all_candidate_seeds(graph)
-    print(f"Found {len(all_candidates)} candidate seed nodes", file=sys.stderr)
 
-    if len(all_candidates) < num_prompts:
+    if not quiet:
+        print(f"Found {len(all_candidates)} candidate seed nodes", file=sys.stderr)
+
+    if len(all_candidates) < num_prompts and not quiet:
         print(
             f"Warning: Only {len(all_candidates)} candidates for {num_prompts} prompts",
             file=sys.stderr,
@@ -185,10 +203,11 @@ def generate_diverse_prompts(
     strategy_idx = 0
     strategy_counts: Counter[str] = Counter()
 
-    print(file=sys.stderr)
-    print("=" * 60, file=sys.stderr)
-    print("GENERATING PROMPTS", file=sys.stderr)
-    print("=" * 60, file=sys.stderr)
+    if not quiet:
+        print(file=sys.stderr)
+        print("=" * 60, file=sys.stderr)
+        print("GENERATING PROMPTS", file=sys.stderr)
+        print("=" * 60, file=sys.stderr)
 
     while len(prompts) < num_prompts:
         if not strategy_queue:
@@ -199,18 +218,20 @@ def generate_diverse_prompts(
 
         seed = sample_seed_node(graph, exclude_ids=used_seeds)
         if seed is None:
-            print(f"\nExhausted seed pool at prompt {len(prompts)}", file=sys.stderr)
+            if not quiet:
+                print(f"\nExhausted seed pool at prompt {len(prompts)}", file=sys.stderr)
             break
 
         used_seeds.add(seed.node_id)
         seed_name = seed.properties.get("name", f"node_{seed.node_id}")
         seed_qualified_name = seed.properties.get("qualified_name", "")
 
-        print(
-            f"[{len(prompts) + 1:3d}/{num_prompts}] "
-            f"Strategy: {strategy:8s} | Seed: {seed_name}",
-            file=sys.stderr,
-        )
+        if not quiet:
+            print(
+                f"[{len(prompts) + 1:3d}/{num_prompts}] "
+                f"Strategy: {strategy:8s} | Seed: {seed_name}",
+                file=sys.stderr,
+            )
 
         context_nodes = expand_with_strategy(graph, seed.node_id, strategy)
         graph_context, source_context = build_context(
@@ -218,7 +239,8 @@ def generate_diverse_prompts(
         )
 
         if not source_context.strip():
-            print("  -> Skipped (no source)", file=sys.stderr)
+            if not quiet:
+                print("  -> Skipped (no source)", file=sys.stderr)
             continue
 
         prompt_text = META_PROMPT.format(
@@ -245,20 +267,21 @@ def generate_diverse_prompts(
         prompts.append(record)
         strategy_counts[strategy] += 1
 
-    print(file=sys.stderr)
-    print("=" * 60, file=sys.stderr)
-    print("GENERATION COMPLETE", file=sys.stderr)
-    print("=" * 60, file=sys.stderr)
-    print(f"Total prompts: {len(prompts)}", file=sys.stderr)
-    print(f"Unique seeds used: {len(used_seeds)}", file=sys.stderr)
-    print(file=sys.stderr)
-    print("By strategy:", file=sys.stderr)
-    total = sum(strategy_counts.values())
-    for strategy in sorted(weights.keys()):
-        count = strategy_counts[strategy]
-        pct = (count / total * 100) if total > 0 else 0
-        print(f"  {strategy:10s}: {count:3d} ({pct:5.1f}%)", file=sys.stderr)
-    print(file=sys.stderr)
+    if not quiet:
+        print(file=sys.stderr)
+        print("=" * 60, file=sys.stderr)
+        print("GENERATION COMPLETE", file=sys.stderr)
+        print("=" * 60, file=sys.stderr)
+        print(f"Total prompts: {len(prompts)}", file=sys.stderr)
+        print(f"Unique seeds used: {len(used_seeds)}", file=sys.stderr)
+        print(file=sys.stderr)
+        print("By strategy:", file=sys.stderr)
+        total = sum(strategy_counts.values())
+        for strategy in sorted(weights.keys()):
+            count = strategy_counts[strategy]
+            pct = (count / total * 100) if total > 0 else 0
+            print(f"  {strategy:10s}: {count:3d} ({pct:5.1f}%)", file=sys.stderr)
+        print(file=sys.stderr)
 
     return prompts
 
