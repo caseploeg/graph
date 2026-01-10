@@ -233,6 +233,7 @@ Question generation processes multiple repos in parallel using ProcessPoolExecut
 2. Max questions per repo = number of candidate seed nodes
 3. Repos with fewer than `--min-questions` candidates are skipped
 4. Questions use various expansion strategies (callees, callers, chain, file, bfs)
+5. Each prompt has a timeout (default 30s) - slow seeds are skipped to prevent blocking
 
 ### Question Generation Options
 
@@ -244,6 +245,7 @@ Question generation processes multiple repos in parallel using ProcessPoolExecut
 | `--target-questions` | Target questions per repo (default: 10000) |
 | `--min-questions` | Minimum candidates required (default: 10) |
 | `--question-workers` | Parallel workers for question generation |
+| `--timeout` | Timeout in seconds per prompt generation (default: 30) |
 
 ### Question Output Structure
 

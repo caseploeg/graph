@@ -41,8 +41,10 @@ from __future__ import annotations
 import argparse
 import json
 import random
+import signal
 import sys
 from collections import Counter
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -83,6 +85,39 @@ class DiversePromptRecord:
     context_node_ids: list[int]
     file_paths: list[str]
     prompt_text: str
+
+
+class GenerationTimeout(Exception):
+    """Raised when a single prompt generation exceeds the timeout."""
+
+    pass
+
+
+@contextmanager
+def timeout_context(seconds: int):
+    """Context manager for timing out slow operations.
+
+    Uses signal.alarm on Unix systems. On Windows or when signals
+    aren't available, the timeout is a no-op.
+    """
+    if seconds <= 0 or not hasattr(signal, "SIGALRM"):
+        yield
+        return
+
+    def handler(signum, frame):
+        raise GenerationTimeout(f"Operation timed out after {seconds}s")
+
+    old_handler = signal.signal(signal.SIGALRM, handler)
+    signal.alarm(seconds)
+    try:
+        yield
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, old_handler)
+
+
+# Default timeout per prompt generation (seconds)
+DEFAULT_PROMPT_TIMEOUT = 30
 
 
 STRATEGY_WEIGHTS = {
@@ -143,6 +178,7 @@ def generate_diverse_prompts(
     max_tokens: int = 8000,
     random_seed: int | None = None,
     quiet: bool = False,
+    prompt_timeout: int = DEFAULT_PROMPT_TIMEOUT,
 ) -> list[DiversePromptRecord]:
     """Generate prompts with strategy rotation for diversity.
 
@@ -155,6 +191,7 @@ def generate_diverse_prompts(
         max_tokens: Maximum tokens for context
         random_seed: Optional random seed for reproducibility
         quiet: Suppress verbose output (for parallel workers)
+        prompt_timeout: Timeout in seconds per prompt generation (default: 30)
 
     Returns list of DiversePromptRecord objects with rich metadata.
     """
@@ -204,6 +241,7 @@ def generate_diverse_prompts(
     used_seeds: set[int] = set()
     strategy_idx = 0
     strategy_counts: Counter[str] = Counter()
+    timeout_count = 0
 
     if not quiet:
         print(file=sys.stderr)
@@ -240,22 +278,31 @@ def generate_diverse_prompts(
                 file=sys.stderr,
             )
 
-        context_nodes = expand_with_strategy(graph, seed.node_id, strategy)
-        graph_context, source_context = build_context(
-            graph, extractor, context_nodes, seed.node_id, max_tokens
-        )
+        # Wrap slow operations in timeout context
+        try:
+            with timeout_context(prompt_timeout):
+                context_nodes = expand_with_strategy(graph, seed.node_id, strategy)
+                graph_context, source_context = build_context(
+                    graph, extractor, context_nodes, seed.node_id, max_tokens
+                )
 
-        if not source_context.strip():
+                if not source_context.strip():
+                    if not quiet:
+                        print("  -> Skipped (no source)", file=sys.stderr)
+                    continue
+
+                prompt_text = META_PROMPT.format(
+                    graph_context=graph_context, source_context=source_context
+                )
+
+                # Collect file paths from context nodes
+                file_paths = sorted(collect_files_from_nodes(graph, context_nodes))
+
+        except GenerationTimeout:
+            timeout_count += 1
             if not quiet:
-                print("  -> Skipped (no source)", file=sys.stderr)
+                print(f"  -> Timeout ({prompt_timeout}s), skipping seed", file=sys.stderr)
             continue
-
-        prompt_text = META_PROMPT.format(
-            graph_context=graph_context, source_context=source_context
-        )
-
-        # Collect file paths from context nodes
-        file_paths = sorted(collect_files_from_nodes(graph, context_nodes))
 
         # Build the record with all metadata
         prompt_id = f"{repo_name}_{len(prompts) + 1:04d}"
@@ -281,6 +328,8 @@ def generate_diverse_prompts(
         print("=" * 60, file=sys.stderr)
         print(f"Total prompts: {len(prompts)}", file=sys.stderr)
         print(f"Unique seeds used: {len(used_seeds)}", file=sys.stderr)
+        if timeout_count > 0:
+            print(f"Timeouts: {timeout_count}", file=sys.stderr)
         print(file=sys.stderr)
         print("By strategy:", file=sys.stderr)
         total = sum(strategy_counts.values())
@@ -348,6 +397,12 @@ def main() -> None:
         default=None,
         help="Repository name for output metadata (default: derived from --repo path)",
     )
+    parser.add_argument(
+        "--timeout",
+        type=int,
+        default=DEFAULT_PROMPT_TIMEOUT,
+        help=f"Timeout in seconds per prompt generation (default: {DEFAULT_PROMPT_TIMEOUT})",
+    )
 
     args = parser.parse_args()
 
@@ -377,6 +432,7 @@ def main() -> None:
         weights=weights,
         max_tokens=args.max_tokens,
         random_seed=args.random_seed,
+        prompt_timeout=args.timeout,
     )
 
     if args.output:

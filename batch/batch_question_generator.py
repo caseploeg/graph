@@ -33,6 +33,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from codebase_rag.graph_loader import GraphLoader
 
 from generate_diverse_questions import (
+    DEFAULT_PROMPT_TIMEOUT,
     DiversePromptRecord,
     generate_diverse_prompts,
 )
@@ -99,6 +100,7 @@ def generate_questions_for_repo(
     min_questions: int = 10,
     random_seed: int | None = None,
     quiet: bool = False,
+    prompt_timeout: int = DEFAULT_PROMPT_TIMEOUT,
 ) -> dict:
     """
     Generate questions for a single repo.
@@ -111,6 +113,7 @@ def generate_questions_for_repo(
         min_questions: Minimum candidates required
         random_seed: Optional random seed for reproducibility
         quiet: Suppress verbose output (for parallel workers)
+        prompt_timeout: Timeout in seconds per prompt generation
 
     Returns summary dict with stats.
     """
@@ -141,6 +144,7 @@ def generate_questions_for_repo(
             repo_name=repo_name,
             random_seed=random_seed,
             quiet=quiet,
+            prompt_timeout=prompt_timeout,
         )
 
         # Write to JSONL
@@ -178,7 +182,7 @@ def generate_questions_worker(args: tuple) -> dict:
     logger.add(lambda msg: None, level="ERROR")
     logging.getLogger().setLevel(logging.ERROR)
 
-    graph_path, repo_path, output_path, target_questions, min_questions = args
+    graph_path, repo_path, output_path, target_questions, min_questions, prompt_timeout = args
     return generate_questions_for_repo(
         graph_path=graph_path,
         repo_path=repo_path,
@@ -186,6 +190,7 @@ def generate_questions_worker(args: tuple) -> dict:
         target_questions=target_questions,
         min_questions=min_questions,
         quiet=True,  # Suppress output in worker processes
+        prompt_timeout=prompt_timeout,
     )
 
 
@@ -207,6 +212,7 @@ def batch_generate_questions(
     limit: int | None = None,
     workers: int | None = None,
     on_complete: QuestionCallback = None,
+    prompt_timeout: int = DEFAULT_PROMPT_TIMEOUT,
 ) -> list[dict]:
     """
     Generate questions for all graphs in a directory using parallel processing.
@@ -220,6 +226,7 @@ def batch_generate_questions(
         limit: Process only first N graphs
         workers: Number of parallel workers (default: cpu_count - 2)
         on_complete: Callback for each completed repo
+        prompt_timeout: Timeout in seconds per prompt generation
 
     Returns:
         List of result dicts with stats per repo
@@ -262,7 +269,7 @@ def batch_generate_questions(
             continue
 
         output_path = questions_dir / f"{repo_name}_questions.jsonl"
-        args_list.append((graph_path, repo_path, output_path, target_per_repo, min_questions))
+        args_list.append((graph_path, repo_path, output_path, target_per_repo, min_questions, prompt_timeout))
 
     print(f"Processing {len(args_list)} repos ({len(skipped_results)} skipped - repo not found)")
 
@@ -379,6 +386,12 @@ def main() -> None:
         default=None,
         help=f"Number of parallel workers (default: cpu_count - 2 = {get_optimal_workers()})",
     )
+    parser.add_argument(
+        "--timeout",
+        type=int,
+        default=DEFAULT_PROMPT_TIMEOUT,
+        help=f"Timeout in seconds per prompt generation (default: {DEFAULT_PROMPT_TIMEOUT})",
+    )
 
     args = parser.parse_args()
 
@@ -398,6 +411,7 @@ def main() -> None:
         min_questions=args.min_questions,
         limit=args.limit,
         workers=args.workers,
+        prompt_timeout=args.timeout,
     )
 
 
