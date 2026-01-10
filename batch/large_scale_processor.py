@@ -59,6 +59,7 @@ class LargeScaleConfig:
     min_questions: int = 10
     questions_only: bool = False  # Skip clone/process, only generate questions
     question_workers: int | None = None  # Workers for question generation (default: auto)
+    prompt_timeout: int = 30  # Timeout in seconds per prompt generation
 
 
 @dataclass
@@ -278,6 +279,7 @@ class LargeScaleBatchProcessor:
             target_per_repo=self.config.target_questions_per_repo,
             min_questions=self.config.min_questions,
             workers=self.config.question_workers,
+            prompt_timeout=self.config.prompt_timeout,
         )
 
         return results
@@ -548,6 +550,12 @@ def main() -> None:
         default=None,
         help=f"Workers for question generation (default: cpu_count - 2 = {get_optimal_workers()})",
     )
+    parser.add_argument(
+        "--timeout",
+        type=int,
+        default=30,
+        help="Timeout in seconds per prompt generation (default: 30)",
+    )
 
     args = parser.parse_args()
 
@@ -590,6 +598,7 @@ def main() -> None:
         min_questions=args.min_questions,
         questions_only=args.questions_only,
         question_workers=args.question_workers,
+        prompt_timeout=args.timeout,
     )
 
     print("=" * 60)
