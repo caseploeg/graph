@@ -97,16 +97,13 @@ def compute_max_questions(
     """
     Compute max questions for a repo based on candidate count.
 
-    Heuristic:
-    - Each question uses a unique seed node
-    - Max questions = number of candidate seeds
-    - Target is capped by available seeds
-    - Minimum threshold to avoid tiny outputs
+    Returns target_per_repo if repo has enough candidates.
+    The generation loop handles exhaustion naturally when all
+    (seed, strategy) combos are used up.
     """
     if num_candidates < min_questions:
         return 0  # Skip repos that are too small
-
-    return min(target_per_repo, num_candidates)
+    return target_per_repo
 
 
 def get_repo_path_for_graph(graph_path: Path, clones_dir: Path) -> Path | None:
