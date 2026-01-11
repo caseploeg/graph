@@ -17,6 +17,11 @@ class QuestionCategory(StrEnum):
     DEPENDENCY = "dependency"
     BRIDGE = "bridge"
     OVERRIDE = "override"
+    # New categories for sparse repos
+    IMPORT = "import"
+    HIERARCHY = "hierarchy"
+    DEFINITION = "definition"
+    EXTERNAL = "external"
 
 
 class Difficulty(StrEnum):
@@ -167,6 +172,35 @@ class QuestionGenerator:
                 "When `{child}.{method}` overrides the parent, what specific logic does it add?",
                 "Does `{child}.{method}` call super()? What parent behavior does it preserve or replace?",
             ],
+            # New categories for sparse repos
+            QuestionCategory.IMPORT: [
+                "What modules does `{module}` import directly?",
+                "Which modules both import `{common_module}`?",
+                "Trace the import chain from `{start_module}` to `{end_module}`.",
+                "What would break if `{module}` was removed from the codebase?",
+                "What functionality does `{module}` get from importing `{imported}`?",
+            ],
+            QuestionCategory.HIERARCHY: [
+                "What is the inheritance chain for `{class_name}`?",
+                "Which classes inherit from `{parent_class}`?",
+                "Do `{class_a}` and `{class_b}` share a common ancestor?",
+                "What methods does `{class_name}` inherit from its parent classes?",
+                "How deep is the inheritance hierarchy for `{class_name}`?",
+            ],
+            QuestionCategory.DEFINITION: [
+                "Where is `{symbol}` defined in the codebase?",
+                "What functions does `{module}` define?",
+                "What classes are defined in the `{module}` module?",
+                "Which module contains both `{func_a}` and `{func_b}`?",
+                "List all the public functions defined in `{module}`.",
+            ],
+            QuestionCategory.EXTERNAL: [
+                "What external packages does this project use?",
+                "Which modules import the `{package}` package?",
+                "What standard library modules are used in `{module}`?",
+                "How is `{package}` used across different modules?",
+                "What external dependencies does `{module}` rely on?",
+            ],
         }
 
     def find_call_chains(
@@ -270,6 +304,154 @@ class QuestionGenerator:
                     (self.g.short_name(child_qn), src, self.g.short_name(parent_qn), tgt)
                 )
         return overrides
+
+    # === New finder methods for sparse repos ===
+
+    def find_import_chains(self, min_depth: int = 2) -> list[GraphPath]:
+        """Find import chains between modules."""
+        chains = []
+        module_nodes = self.g.by_type.get("Module", [])
+
+        for start_id in module_nodes:
+            start_qn = self.g.get_qname(start_id)
+            if not self.g.is_production(start_qn):
+                continue
+
+            # DFS to find import paths
+            paths = self._dfs_imports(start_id, [], [], max_depth=4)
+            for path_ids, edge_types in paths:
+                if len(path_ids) >= min_depth + 1:
+                    qnames = [self.g.get_qname(nid) for nid in path_ids]
+                    if all(self.g.is_production(qn) for qn in qnames):
+                        chains.append(
+                            GraphPath(
+                                node_names=[self.g.short_name(qn) for qn in qnames],
+                                node_ids=path_ids,
+                                edge_types=edge_types,
+                                modules=set(),
+                            )
+                        )
+        return chains
+
+    def _dfs_imports(
+        self, current: int, path: list[int], edges: list[str], max_depth: int
+    ) -> list[tuple[list[int], list[str]]]:
+        """DFS for import relationships."""
+        if current in path:
+            return []
+
+        new_path = path + [current]
+        new_edges = edges
+
+        if len(new_path) > max_depth:
+            return [(new_path, new_edges)]
+
+        results = []
+        for edge_type, target in self.g.outgoing[current]:
+            if edge_type == "IMPORTS":
+                child_results = self._dfs_imports(
+                    target, new_path, new_edges + ["IMPORTS"], max_depth
+                )
+                results.extend(child_results)
+
+        if not results:
+            results.append((new_path, new_edges))
+
+        return results
+
+    def find_class_hierarchies(self, min_depth: int = 1) -> list[tuple[str, int, list[tuple[str, int]]]]:
+        """Find classes with their inheritance chains.
+
+        Returns list of (class_name, class_id, [(parent_name, parent_id), ...])
+        """
+        hierarchies = []
+
+        for class_id in self.g.by_type.get("Class", []):
+            class_qn = self.g.get_qname(class_id)
+            if not self.g.is_production(class_qn):
+                continue
+
+            # Trace ancestors
+            ancestors = []
+            visited = {class_id}
+            frontier = [class_id]
+
+            while frontier:
+                current = frontier.pop(0)
+                for edge_type, target in self.g.outgoing.get(current, []):
+                    if edge_type == "INHERITS" and target not in visited:
+                        parent_qn = self.g.get_qname(target)
+                        if parent_qn:
+                            ancestors.append((self.g.short_name(parent_qn), target))
+                            visited.add(target)
+                            frontier.append(target)
+
+            if len(ancestors) >= min_depth:
+                hierarchies.append(
+                    (self.g.short_name(class_qn), class_id, ancestors)
+                )
+
+        return hierarchies
+
+    def find_module_definitions(self) -> dict[int, dict[str, list[tuple[str, int]]]]:
+        """Find all definitions (functions, classes) per module.
+
+        Returns {module_id: {"functions": [(name, id), ...], "classes": [(name, id), ...]}}
+        """
+        definitions = {}
+
+        for module_id in self.g.by_type.get("Module", []):
+            module_qn = self.g.get_qname(module_id)
+            if not self.g.is_production(module_qn):
+                continue
+
+            funcs = []
+            classes = []
+
+            for edge_type, target in self.g.outgoing.get(module_id, []):
+                if edge_type == "DEFINES":
+                    target_node = self.g.nodes.get(target, {})
+                    target_labels = target_node.get("labels", [])
+                    target_qn = self.g.get_qname(target)
+
+                    if "Function" in target_labels:
+                        funcs.append((self.g.short_name(target_qn), target))
+                    elif "Class" in target_labels:
+                        classes.append((self.g.short_name(target_qn), target))
+
+            if funcs or classes:
+                definitions[module_id] = {"functions": funcs, "classes": classes}
+
+        return definitions
+
+    def find_external_dependencies(self) -> list[tuple[str, int, list[tuple[str, int]]]]:
+        """Find modules and their external package dependencies.
+
+        Returns list of (module_name, module_id, [(package_name, package_id), ...])
+        """
+        dependencies = []
+
+        for module_id in self.g.by_type.get("Module", []):
+            module_qn = self.g.get_qname(module_id)
+            if not self.g.is_production(module_qn):
+                continue
+
+            external_deps = []
+            for edge_type, target in self.g.outgoing.get(module_id, []):
+                if edge_type == "IMPORTS":
+                    target_node = self.g.nodes.get(target, {})
+                    target_labels = target_node.get("labels", [])
+                    # Check if it's an external package (usually has ExternalPackage label or specific path pattern)
+                    target_qn = self.g.get_qname(target)
+                    if target_qn and not self.g.is_production(target_qn):
+                        external_deps.append((self.g.short_name(target_qn), target))
+
+            if external_deps:
+                dependencies.append(
+                    (self.g.short_name(module_qn), module_id, external_deps)
+                )
+
+        return dependencies
 
     def _build_code_context(self, node_name: str, node_id: int) -> CodeContext:
         result = self.g.extract_code_context(node_id)
@@ -409,6 +591,176 @@ class QuestionGenerator:
             source_files=source_files,
         )
 
+    # === New question generators for sparse repos ===
+
+    def generate_import_question(
+        self, path: GraphPath, include_context: bool = True
+    ) -> GeneratedQuestion:
+        """Generate an IMPORT category question."""
+        template = random.choice(self.templates[QuestionCategory.IMPORT])
+
+        question = template.format(
+            module=path.node_names[0] if path.node_names else "unknown",
+            start_module=path.node_names[0] if path.node_names else "unknown",
+            end_module=path.node_names[-1] if path.node_names else "unknown",
+            common_module=path.node_names[len(path.node_names) // 2] if len(path.node_names) > 2 else path.node_names[0],
+            imported=path.node_names[-1] if len(path.node_names) > 1 else "unknown",
+        )
+
+        code_contexts = []
+        source_files = []
+        if include_context:
+            code_contexts = self._build_code_contexts_for_path(path)
+            source_files = list({c.file_path for c in code_contexts if c.file_path})
+
+        return GeneratedQuestion(
+            question=question,
+            category=QuestionCategory.IMPORT,
+            difficulty=Difficulty.EASY if len(path.node_ids) <= 2 else Difficulty.MEDIUM,
+            answer_path=path,
+            code_contexts=code_contexts,
+            source_files=source_files,
+        )
+
+    def generate_hierarchy_question(
+        self,
+        class_name: str,
+        class_id: int,
+        ancestors: list[tuple[str, int]],
+        include_context: bool = True,
+    ) -> GeneratedQuestion:
+        """Generate a HIERARCHY category question."""
+        template = random.choice(self.templates[QuestionCategory.HIERARCHY])
+
+        parent_class = ancestors[0][0] if ancestors else "object"
+        class_a = class_name
+        class_b = ancestors[-1][0] if len(ancestors) > 1 else parent_class
+
+        question = template.format(
+            class_name=class_name,
+            parent_class=parent_class,
+            class_a=class_a,
+            class_b=class_b,
+        )
+
+        all_ids = [class_id] + [a[1] for a in ancestors]
+        all_names = [class_name] + [a[0] for a in ancestors]
+
+        path = GraphPath(
+            node_names=all_names,
+            node_ids=all_ids,
+            edge_types=["INHERITS"] * len(ancestors),
+            modules=set(),
+        )
+
+        code_contexts = []
+        source_files = []
+        if include_context:
+            code_contexts = [self._build_code_context(class_name, class_id)]
+            for parent_name, parent_id in ancestors[:2]:  # Limit to first 2 ancestors
+                code_contexts.append(self._build_code_context(parent_name, parent_id))
+            source_files = list({c.file_path for c in code_contexts if c.file_path})
+
+        return GeneratedQuestion(
+            question=question,
+            category=QuestionCategory.HIERARCHY,
+            difficulty=Difficulty.EASY if len(ancestors) <= 1 else Difficulty.MEDIUM,
+            answer_path=path,
+            code_contexts=code_contexts,
+            source_files=source_files,
+        )
+
+    def generate_definition_question(
+        self,
+        module_name: str,
+        module_id: int,
+        definitions: dict[str, list[tuple[str, int]]],
+        include_context: bool = True,
+    ) -> GeneratedQuestion:
+        """Generate a DEFINITION category question."""
+        template = random.choice(self.templates[QuestionCategory.DEFINITION])
+
+        funcs = definitions.get("functions", [])
+        classes = definitions.get("classes", [])
+        all_defs = funcs + classes
+
+        # Pick representative symbols for the template
+        symbol = funcs[0][0] if funcs else (classes[0][0] if classes else "unknown")
+        func_a = funcs[0][0] if len(funcs) > 0 else "unknown"
+        func_b = funcs[1][0] if len(funcs) > 1 else func_a
+
+        question = template.format(
+            module=module_name,
+            symbol=symbol,
+            func_a=func_a,
+            func_b=func_b,
+        )
+
+        all_ids = [module_id] + [d[1] for d in all_defs[:5]]
+        all_names = [module_name] + [d[0] for d in all_defs[:5]]
+
+        path = GraphPath(
+            node_names=all_names,
+            node_ids=all_ids,
+            edge_types=["DEFINES"] * min(len(all_defs), 5),
+            modules={module_name},
+        )
+
+        code_contexts = []
+        source_files = []
+        if include_context:
+            for def_name, def_id in all_defs[:3]:  # Limit context
+                code_contexts.append(self._build_code_context(def_name, def_id))
+            source_files = list({c.file_path for c in code_contexts if c.file_path})
+
+        return GeneratedQuestion(
+            question=question,
+            category=QuestionCategory.DEFINITION,
+            difficulty=Difficulty.EASY,
+            answer_path=path,
+            code_contexts=code_contexts,
+            source_files=source_files,
+        )
+
+    def generate_external_question(
+        self,
+        module_name: str,
+        module_id: int,
+        external_deps: list[tuple[str, int]],
+        include_context: bool = True,
+    ) -> GeneratedQuestion:
+        """Generate an EXTERNAL category question."""
+        template = random.choice(self.templates[QuestionCategory.EXTERNAL])
+
+        package = external_deps[0][0] if external_deps else "unknown"
+
+        question = template.format(
+            module=module_name,
+            package=package,
+        )
+
+        path = GraphPath(
+            node_names=[module_name] + [d[0] for d in external_deps[:3]],
+            node_ids=[module_id] + [d[1] for d in external_deps[:3]],
+            edge_types=["IMPORTS"] * min(len(external_deps), 3),
+            modules={module_name},
+        )
+
+        code_contexts = []
+        source_files = []
+        if include_context:
+            code_contexts = [self._build_code_context(module_name, module_id)]
+            source_files = list({c.file_path for c in code_contexts if c.file_path})
+
+        return GeneratedQuestion(
+            question=question,
+            category=QuestionCategory.EXTERNAL,
+            difficulty=Difficulty.EASY,
+            answer_path=path,
+            code_contexts=code_contexts,
+            source_files=source_files,
+        )
+
     def _assess_difficulty(self, hops: int, modules_crossed: int) -> Difficulty:
         score = hops + modules_crossed
         if score <= 3:
@@ -429,15 +781,18 @@ class QuestionGenerator:
             categories = list(QuestionCategory)
 
         questions = []
+        num_categories = len(categories)
+        per_category = max(1, count // num_categories)
 
+        # Original categories
         if QuestionCategory.TRACE in categories:
             chains = self.find_call_chains(min_hops=3, max_hops=4)
-            for path in random.sample(chains, min(count // 3, len(chains))):
+            for path in random.sample(chains, min(per_category, len(chains))):
                 questions.append(self.generate_trace_question(path, include_context))
 
         if QuestionCategory.BRIDGE in categories:
             bridges = self.find_bridge_functions(min_modules=3)
-            for target, target_id, modules in bridges[: count // 3]:
+            for target, target_id, modules in bridges[:per_category]:
                 questions.append(
                     self.generate_bridge_question(target, target_id, modules, include_context)
                 )
@@ -445,12 +800,46 @@ class QuestionGenerator:
         if QuestionCategory.OVERRIDE in categories:
             overrides = self.find_overrides()
             for child, child_id, parent, parent_id in random.sample(
-                overrides, min(count // 3, len(overrides))
+                overrides, min(per_category, len(overrides))
             ):
                 questions.append(
                     self.generate_override_question(
                         child, child_id, parent, parent_id, include_context
                     )
+                )
+
+        # New sparse repo categories
+        if QuestionCategory.IMPORT in categories:
+            import_chains = self.find_import_chains(min_depth=1)
+            for path in random.sample(import_chains, min(per_category, len(import_chains))):
+                questions.append(self.generate_import_question(path, include_context))
+
+        if QuestionCategory.HIERARCHY in categories:
+            hierarchies = self.find_class_hierarchies(min_depth=1)
+            for class_name, class_id, ancestors in random.sample(
+                hierarchies, min(per_category, len(hierarchies))
+            ):
+                questions.append(
+                    self.generate_hierarchy_question(class_name, class_id, ancestors, include_context)
+                )
+
+        if QuestionCategory.DEFINITION in categories:
+            definitions = self.find_module_definitions()
+            module_items = list(definitions.items())
+            for module_id, defs in random.sample(module_items, min(per_category, len(module_items))):
+                module_qn = self.g.get_qname(module_id)
+                module_name = self.g.short_name(module_qn) if module_qn else f"module_{module_id}"
+                questions.append(
+                    self.generate_definition_question(module_name, module_id, defs, include_context)
+                )
+
+        if QuestionCategory.EXTERNAL in categories:
+            external_deps = self.find_external_dependencies()
+            for module_name, module_id, deps in random.sample(
+                external_deps, min(per_category, len(external_deps))
+            ):
+                questions.append(
+                    self.generate_external_question(module_name, module_id, deps, include_context)
                 )
 
         random.shuffle(questions)

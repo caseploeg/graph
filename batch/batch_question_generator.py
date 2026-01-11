@@ -37,18 +37,55 @@ from generate_diverse_questions import (
     DiversePromptRecord,
     generate_diverse_prompts,
 )
-from question_generator import get_all_candidate_seeds
+from question_debug_stats import QuestionDebugStats
+from question_generator import get_all_candidate_seeds, get_sparse_candidate_seeds
 
 
-def count_candidate_seeds(graph_path: Path, min_connections: int = 2) -> int:
-    """Count candidate seed nodes in a graph without full generation."""
+def count_candidate_seeds(
+    graph_path: Path,
+    min_connections: int = 2,
+    debug: bool = False,
+    sparse_mode: bool = False,
+) -> int | tuple[int, QuestionDebugStats | None]:
+    """Count candidate seed nodes in a graph without full generation.
+
+    Args:
+        graph_path: Path to the graph JSON file
+        min_connections: Minimum connections required
+        debug: If True, return (count, debug_stats) tuple
+        sparse_mode: If True, use sparse candidate selection (more relationship types)
+
+    Returns:
+        int if debug=False, tuple[int, QuestionDebugStats] if debug=True
+    """
     try:
         graph = GraphLoader(str(graph_path))
         graph.load()
-        candidates = get_all_candidate_seeds(graph, min_connections=min_connections)
+
+        debug_stats = None
+        if debug:
+            debug_stats = QuestionDebugStats()
+            # Populate graph stats from summary
+            summary = graph.summary()
+            debug_stats.node_counts = dict(summary.node_labels)
+            debug_stats.relationship_counts = dict(summary.relationship_types)
+
+        if sparse_mode:
+            candidates = get_sparse_candidate_seeds(
+                graph, min_connections=min_connections, debug_stats=debug_stats
+            )
+        else:
+            candidates = get_all_candidate_seeds(
+                graph, min_connections=min_connections, debug_stats=debug_stats
+            )
+
+        if debug:
+            return len(candidates), debug_stats
         return len(candidates)
     except Exception as e:
         print(f"  Warning: Could not count seeds for {graph_path.name}: {e}")
+        if debug:
+            return 0, None
         return 0
 
 
@@ -112,6 +149,8 @@ def generate_questions_for_repo(
     random_seed: int | None = None,
     quiet: bool = False,
     prompt_timeout: int = DEFAULT_PROMPT_TIMEOUT,
+    debug: bool = False,
+    sparse_fallback: bool = True,
 ) -> dict:
     """
     Generate questions for a single repo.
@@ -125,16 +164,48 @@ def generate_questions_for_repo(
         random_seed: Optional random seed for reproducibility
         quiet: Suppress verbose output (for parallel workers)
         prompt_timeout: Timeout in seconds per prompt generation
+        debug: Show detailed debug statistics
+        sparse_fallback: Try sparse mode if regular mode has too few candidates
 
     Returns summary dict with stats.
     """
     # Use owner/repo format for unique repo identification
     owner = repo_path.parent.name
     repo_name = f"{owner}/{repo_path.name}"
+    sparse_mode_used = False
 
-    # Count candidates first
-    num_candidates = count_candidate_seeds(graph_path)
+    # Count candidates first (with debug stats if requested)
+    if debug:
+        num_candidates, debug_stats = count_candidate_seeds(graph_path, debug=True)
+        if debug_stats and not quiet:
+            print(f"\n=== DEBUG: {repo_name} ===")
+            print(debug_stats.format_summary(verbose=False))
+    else:
+        num_candidates = count_candidate_seeds(graph_path)
+
     max_questions = compute_max_questions(num_candidates, target_questions, min_questions)
+
+    # Try sparse mode if regular mode produces too few candidates
+    if max_questions == 0 and sparse_fallback:
+        if debug:
+            sparse_candidates, sparse_stats = count_candidate_seeds(
+                graph_path, min_connections=1, debug=True, sparse_mode=True
+            )
+            if sparse_stats and not quiet:
+                print(f"\n=== DEBUG (sparse mode): {repo_name} ===")
+                print(sparse_stats.format_summary(verbose=False))
+        else:
+            sparse_candidates = count_candidate_seeds(
+                graph_path, min_connections=1, sparse_mode=True
+            )
+
+        sparse_max = compute_max_questions(sparse_candidates, target_questions, min_questions)
+        if sparse_max > 0:
+            num_candidates = sparse_candidates
+            max_questions = sparse_max
+            sparse_mode_used = True
+            if not quiet:
+                print(f"  Using sparse mode: {num_candidates} candidates")
 
     if max_questions == 0:
         return {
@@ -173,6 +244,7 @@ def generate_questions_for_repo(
             "candidates": num_candidates,
             "generated": len(prompts),
             "skipped": False,
+            "sparse_mode": sparse_mode_used,
         }
 
     except Exception as e:
@@ -183,6 +255,7 @@ def generate_questions_for_repo(
             "generated": 0,
             "skipped": True,
             "reason": str(e),
+            "sparse_mode": sparse_mode_used,
         }
 
 
@@ -195,7 +268,7 @@ def generate_questions_worker(args: tuple) -> dict:
     logger.add(lambda msg: None, level="ERROR")
     logging.getLogger().setLevel(logging.ERROR)
 
-    graph_path, repo_path, output_path, target_questions, min_questions, prompt_timeout = args
+    graph_path, repo_path, output_path, target_questions, min_questions, prompt_timeout, sparse_fallback = args
     return generate_questions_for_repo(
         graph_path=graph_path,
         repo_path=repo_path,
@@ -204,6 +277,7 @@ def generate_questions_worker(args: tuple) -> dict:
         min_questions=min_questions,
         quiet=True,  # Suppress output in worker processes
         prompt_timeout=prompt_timeout,
+        sparse_fallback=sparse_fallback,
     )
 
 
@@ -226,6 +300,8 @@ def batch_generate_questions(
     workers: int | None = None,
     on_complete: QuestionCallback = None,
     prompt_timeout: int = DEFAULT_PROMPT_TIMEOUT,
+    debug: bool = False,
+    sparse_fallback: bool = True,
 ) -> list[dict]:
     """
     Generate questions for all graphs in a directory using parallel processing.
@@ -240,6 +316,8 @@ def batch_generate_questions(
         workers: Number of parallel workers (default: cpu_count - 2)
         on_complete: Callback for each completed repo
         prompt_timeout: Timeout in seconds per prompt generation
+        debug: Show detailed debug statistics per repo
+        sparse_fallback: Try sparse mode if regular mode has too few candidates
 
     Returns:
         List of result dicts with stats per repo
@@ -258,6 +336,8 @@ def batch_generate_questions(
     print(f"Found {len(graph_files)} graphs to process")
     print(f"Target questions per repo: {target_per_repo}")
     print(f"Minimum candidates required: {min_questions}")
+    print(f"Sparse fallback: {sparse_fallback}")
+    print(f"Debug mode: {debug}")
     print(f"Workers: {workers}")
     print("-" * 60)
 
@@ -282,7 +362,7 @@ def batch_generate_questions(
             continue
 
         output_path = questions_dir / f"{repo_name}_questions.jsonl"
-        args_list.append((graph_path, repo_path, output_path, target_per_repo, min_questions, prompt_timeout))
+        args_list.append((graph_path, repo_path, output_path, target_per_repo, min_questions, prompt_timeout, sparse_fallback))
 
     print(f"Processing {len(args_list)} repos ({len(skipped_results)} skipped - repo not found)")
 
@@ -317,7 +397,8 @@ def batch_generate_questions(
             # Progress output
             status = "OK" if not result.get("skipped") else "SKIP"
             gen_count = result.get("generated", 0)
-            print(f"[{completed}/{total_to_process}] {status}: {repo_name} ({gen_count:,} questions)")
+            sparse_tag = " [sparse]" if result.get("sparse_mode") else ""
+            print(f"[{completed}/{total_to_process}] {status}: {repo_name} ({gen_count:,} questions){sparse_tag}")
 
             if on_complete:
                 on_complete(result)
@@ -327,8 +408,11 @@ def batch_generate_questions(
     print("-" * 60)
     successful = [r for r in results if not r.get("skipped")]
     skipped = [r for r in results if r.get("skipped")]
+    sparse_used = [r for r in successful if r.get("sparse_mode")]
     print(f"Total repos:      {len(results)}")
     print(f"Successful:       {len(successful)}")
+    print(f"  - Regular mode: {len(successful) - len(sparse_used)}")
+    print(f"  - Sparse mode:  {len(sparse_used)}")
     print(f"Skipped:          {len(skipped)}")
     print(f"Total questions:  {total_generated:,}")
     if successful:
@@ -340,9 +424,11 @@ def batch_generate_questions(
     summary = {
         "total_repos": len(results),
         "successful": len(successful),
+        "sparse_mode_used": len(sparse_used),
         "skipped": len(skipped),
         "total_questions": total_generated,
         "target_per_repo": target_per_repo,
+        "sparse_fallback": sparse_fallback,
         "workers": workers,
         "results": results,
     }
@@ -405,6 +491,16 @@ def main() -> None:
         default=DEFAULT_PROMPT_TIMEOUT,
         help=f"Timeout in seconds per prompt generation (default: {DEFAULT_PROMPT_TIMEOUT})",
     )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Show detailed debug stats (node counts, relationship counts, rejection reasons)",
+    )
+    parser.add_argument(
+        "--no-sparse-fallback",
+        action="store_true",
+        help="Disable sparse mode fallback for repos with few CALLS connections",
+    )
 
     args = parser.parse_args()
 
@@ -425,6 +521,8 @@ def main() -> None:
         limit=args.limit,
         workers=args.workers,
         prompt_timeout=args.timeout,
+        debug=args.debug,
+        sparse_fallback=not args.no_sparse_fallback,
     )
 
 

@@ -59,6 +59,8 @@ class LargeScaleConfig:
     min_questions: int = 10
     questions_only: bool = False  # Skip clone/process, only generate questions
     question_workers: int | None = None  # Workers for question generation (default: auto)
+    questions_debug: bool = False  # Show debug stats during question generation
+    sparse_fallback: bool = True  # Try sparse mode if regular mode has too few candidates
 
 
 @dataclass
@@ -278,6 +280,8 @@ class LargeScaleBatchProcessor:
             target_per_repo=self.config.target_questions_per_repo,
             min_questions=self.config.min_questions,
             workers=self.config.question_workers,
+            debug=self.config.questions_debug,
+            sparse_fallback=self.config.sparse_fallback,
         )
 
         return results
@@ -548,6 +552,16 @@ def main() -> None:
         default=None,
         help=f"Workers for question generation (default: cpu_count - 2 = {get_optimal_workers()})",
     )
+    parser.add_argument(
+        "--questions-debug",
+        action="store_true",
+        help="Show debug stats during question generation (node counts, relationship counts, rejection reasons)",
+    )
+    parser.add_argument(
+        "--no-sparse-fallback",
+        action="store_true",
+        help="Disable sparse mode fallback for repos with few CALLS connections",
+    )
 
     args = parser.parse_args()
 
@@ -590,6 +604,8 @@ def main() -> None:
         min_questions=args.min_questions,
         questions_only=args.questions_only,
         question_workers=args.question_workers,
+        questions_debug=args.questions_debug,
+        sparse_fallback=not args.no_sparse_fallback,
     )
 
     print("=" * 60)
@@ -613,6 +629,8 @@ def main() -> None:
         print(f"Questions:   {config.target_questions_per_repo}/repo (min {config.min_questions} candidates)")
         print(f"Q. output:   {config.questions_dir or 'auto'}")
         print(f"Q. workers:  {config.question_workers or 'auto'}")
+        print(f"Q. debug:    {config.questions_debug}")
+        print(f"Sparse mode: {config.sparse_fallback}")
     print("=" * 60)
     print()
 
