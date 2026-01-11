@@ -102,25 +102,36 @@ class NodeTextExtractor:
         return "unknown"
 
     def _find_module_for_node(self, node: GraphNode) -> GraphNode | None:
+        """Find the Module node that ultimately contains this node.
+
+        Handles nested structures by recursively traversing DEFINES relationships
+        until reaching a Module (which has LABELS_WITH_PATH like Module or File).
+        """
         labels = set(node.labels)
 
+        # If node itself is a file-type node (Module/File), return it
         if labels & LABELS_WITH_PATH:
             return node
 
+        # For Methods: find Class via DEFINES_METHOD, then recurse to find Module
         if cs.NodeLabel.METHOD in labels:
             class_node = self._find_parent_via_relationship(
                 node.node_id, cs.RelationshipType.DEFINES_METHOD
             )
             if class_node is None:
                 return None
-            return self._find_parent_via_relationship(
-                class_node.node_id, cs.RelationshipType.DEFINES
-            )
+            # Recursively find module for the class (handles nested classes)
+            return self._find_module_for_node(class_node)
 
+        # For Functions and Classes: traverse DEFINES chain until reaching Module
         if labels & {cs.NodeLabel.FUNCTION, cs.NodeLabel.CLASS}:
-            return self._find_parent_via_relationship(
+            parent = self._find_parent_via_relationship(
                 node.node_id, cs.RelationshipType.DEFINES
             )
+            if parent is None:
+                return None
+            # Recursively find module (handles nested functions/classes)
+            return self._find_module_for_node(parent)
 
         return None
 
