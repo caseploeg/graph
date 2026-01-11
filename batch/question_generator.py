@@ -55,14 +55,20 @@ CHARS_PER_TOKEN_ESTIMATE = 4
 
 def get_all_candidate_seeds(
     graph: GraphLoader,
-    min_connections: int = 3,
+    min_connections: int = 1,
     debug_stats: QuestionDebugStats | None = None,
 ) -> list[tuple[GraphNode, int]]:
-    """Get all valid seed candidates, sorted by connection count.
+    """Get all valid seed candidates, sorted by quality score.
+
+    More permissive selection: accepts candidates with:
+    - Any CALLS relationships (in or out), OR
+    - Significant code (start_line/end_line span > 10 lines), OR
+    - Has docstring, OR
+    - Any other relationships (DEFINES, INHERITS, etc.)
 
     Args:
         graph: The loaded graph
-        min_connections: Minimum CALLS relationships required (in + out)
+        min_connections: Minimum total relationships required (default: 1)
         debug_stats: Optional stats collector for debugging
     """
     candidates: list[tuple[GraphNode, int]] = []
@@ -81,23 +87,43 @@ def get_all_candidate_seeds(
             outgoing = graph.get_outgoing_relationships(node.node_id)
             incoming = graph.get_incoming_relationships(node.node_id)
 
+            # Count CALLS relationships
             calls_out = len([r for r in outgoing if r.type == "CALLS"])
             calls_in = len([r for r in incoming if r.type == "CALLS"])
+            calls_total = calls_out + calls_in
 
-            connection_count = calls_out + calls_in
-            if connection_count >= min_connections:
-                candidates.append((node, connection_count))
+            # Count all relationships (more permissive)
+            all_rels = len(outgoing) + len(incoming)
+
+            # Check code quality indicators
+            start_line = node.properties.get("start_line", 0)
+            end_line = node.properties.get("end_line", 0)
+            code_lines = end_line - start_line if end_line > start_line else 0
+            has_docstring = bool(node.properties.get("docstring"))
+
+            # Calculate quality score (higher = better candidate)
+            # Prioritize: CALLS > other relationships > code size > docstring
+            quality_score = (
+                calls_total * 10 +  # CALLS are most valuable
+                all_rels * 2 +      # Other relationships add value
+                min(code_lines, 50) +  # Larger functions (capped)
+                (5 if has_docstring else 0)  # Docstring bonus
+            )
+
+            # Accept if has any relationships OR is substantial code
+            if all_rels >= min_connections or code_lines >= 10:
+                candidates.append((node, quality_score))
                 if debug_stats:
                     debug_stats.candidates_accepted += 1
             elif debug_stats:
                 node_name = node.properties.get("name", f"node_{node.node_id}")
-                reason = f"{connection_count} CALLS (need {min_connections}+)"
+                reason = f"{all_rels} rels, {code_lines} lines (need {min_connections}+ rels or 10+ lines)"
                 debug_stats.add_rejection(
                     node_id=node.node_id,
                     node_name=node_name,
                     node_type=label,
                     reason=reason,
-                    connection_count=connection_count,
+                    connection_count=all_rels,
                 )
 
     candidates.sort(key=lambda x: (-x[1], x[0].node_id))
