@@ -128,6 +128,9 @@ STRATEGY_WEIGHTS = {
     "bfs": 1,
 }
 
+# Max times a (seed, strategy) combo can be used (with different random expansions)
+MAX_REPEATS_PER_COMBO = 5
+
 
 def parse_weights(weights_str: str) -> dict[str, int]:
     """Parse weights string like 'callees:4,chain:3,file:2'."""
@@ -244,16 +247,21 @@ def generate_diverse_prompts(
     extractor = NodeTextExtractor(graph_path, repo_path)
 
     prompts: list[DiversePromptRecord] = []
-    # Track (seed_id, strategy) combinations to allow seed reuse with different strategies
-    used_combinations: set[tuple[int, str]] = set()
+    # Track (seed_id, strategy) combo usage counts - allows repeats up to MAX_REPEATS_PER_COMBO
+    # since expansion strategies are now non-deterministic (shuffled)
+    combo_counts: dict[tuple[int, str], int] = {}
     strategy_idx = 0
     strategy_counts: Counter[str] = Counter()
     timeout_count = 0
+    unique_strategies = set(weights.keys())
+    max_total_combos = len(candidate_dict) * len(unique_strategies) * MAX_REPEATS_PER_COMBO
 
     if not quiet:
         print(file=sys.stderr)
         print("=" * 60, file=sys.stderr)
         print("GENERATING PROMPTS", file=sys.stderr)
+        print(f"Max repeats per combo: {MAX_REPEATS_PER_COMBO}", file=sys.stderr)
+        print(f"Max theoretical capacity: {max_total_combos:,}", file=sys.stderr)
         print("=" * 60, file=sys.stderr)
 
     while len(prompts) < num_prompts:
@@ -263,17 +271,17 @@ def generate_diverse_prompts(
         strategy = strategy_queue[strategy_idx % len(strategy_queue)]
         strategy_idx += 1
 
-        # Sample from cached candidates, filtering out (seed, strategy) combinations already used
+        # Sample from candidates that haven't hit max repeats for this strategy
         available = [
             (n, c) for nid, (n, c) in candidate_dict.items()
-            if (nid, strategy) not in used_combinations
+            if combo_counts.get((nid, strategy), 0) < MAX_REPEATS_PER_COMBO
         ]
         if not available:
-            # Check if we've exhausted all combinations
-            total_possible = len(candidate_dict) * len(set(strategy_queue))
-            if len(used_combinations) >= total_possible:
+            # Check if we've exhausted all combinations at max repeats
+            total_used = sum(combo_counts.values())
+            if total_used >= max_total_combos:
                 if not quiet:
-                    print(f"\nExhausted all seed+strategy combinations at prompt {len(prompts)}", file=sys.stderr)
+                    print(f"\nExhausted all combinations at max repeats ({len(prompts)} prompts)", file=sys.stderr)
                 break
             # Otherwise, rebuild queue and continue (may find available combos with other strategies)
             strategy_queue = build_strategy_queue(weights)
@@ -283,7 +291,8 @@ def generate_diverse_prompts(
         weights_list = [c for _, c in available]
         seed = random.choices(available, weights=weights_list, k=1)[0][0]
 
-        used_combinations.add((seed.node_id, strategy))
+        combo_key = (seed.node_id, strategy)
+        combo_counts[combo_key] = combo_counts.get(combo_key, 0) + 1
         seed_name = seed.properties.get("name", f"node_{seed.node_id}")
         seed_qualified_name = seed.properties.get("qualified_name", "")
 
@@ -343,9 +352,13 @@ def generate_diverse_prompts(
         print("GENERATION COMPLETE", file=sys.stderr)
         print("=" * 60, file=sys.stderr)
         print(f"Total prompts: {len(prompts)}", file=sys.stderr)
-        unique_seeds = len(set(combo[0] for combo in used_combinations))
+        unique_seeds = len(set(combo[0] for combo in combo_counts.keys()))
+        unique_combos = len(combo_counts)
+        total_combo_uses = sum(combo_counts.values())
+        avg_repeats = total_combo_uses / unique_combos if unique_combos > 0 else 0
         print(f"Unique seeds used: {unique_seeds}", file=sys.stderr)
-        print(f"Seed+strategy combinations: {len(used_combinations)}", file=sys.stderr)
+        print(f"Unique (seed, strategy) combos: {unique_combos}", file=sys.stderr)
+        print(f"Total combo uses: {total_combo_uses} (avg {avg_repeats:.1f} repeats)", file=sys.stderr)
         if timeout_count > 0:
             print(f"Timeouts: {timeout_count}", file=sys.stderr)
         print(file=sys.stderr)
@@ -354,7 +367,7 @@ def generate_diverse_prompts(
         for strategy in sorted(weights.keys()):
             count = strategy_counts[strategy]
             pct = (count / total * 100) if total > 0 else 0
-            print(f"  {strategy:10s}: {count:3d} ({pct:5.1f}%)", file=sys.stderr)
+            print(f"  {strategy:10s}: {count:4d} ({pct:5.1f}%)", file=sys.stderr)
         print(file=sys.stderr)
 
     return prompts
