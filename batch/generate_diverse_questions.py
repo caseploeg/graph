@@ -205,7 +205,13 @@ def generate_diverse_prompts(
 
     # Derive repo_name and detect language once at start
     if repo_name is None:
-        repo_name = repo_path.name
+        # Try to extract owner from repo_path structure (clone_dir/owner/repo)
+        # Use owner/repo format for unique prompt IDs
+        owner = repo_path.parent.name
+        if owner and owner not in (".", "", "test_repos", "clones"):
+            repo_name = f"{owner}/{repo_path.name}"
+        else:
+            repo_name = repo_path.name
     primary_language = detect_primary_language(repo_path)
 
     if not quiet:
