@@ -76,12 +76,23 @@ def get_repo_path_for_graph(graph_path: Path, clones_dir: Path) -> Path | None:
     """
     Find the cloned repo path for a graph file.
 
-    Graph files are named: {repo_name}.json
+    Graph files are named: {owner}__{repo_name}.json (new format)
+    or {repo_name}.json (old format for backwards compatibility)
+
     Clone structure: {clones_dir}/{owner}/{repo_name}/
     """
-    repo_name = graph_path.stem
+    graph_stem = graph_path.stem
 
-    # Search for matching repo in clones directory
+    # New format: owner__repo
+    if "__" in graph_stem:
+        owner, repo_name = graph_stem.split("__", 1)
+        repo_path = clones_dir / owner / repo_name
+        if repo_path.exists() and (repo_path / ".git").exists():
+            return repo_path
+        return None
+
+    # Old format (backwards compatibility): search all owners for repo_name
+    repo_name = graph_stem
     for owner_dir in clones_dir.iterdir():
         if not owner_dir.is_dir():
             continue
@@ -117,7 +128,9 @@ def generate_questions_for_repo(
 
     Returns summary dict with stats.
     """
-    repo_name = repo_path.name
+    # Use owner/repo format for unique repo identification
+    owner = repo_path.parent.name
+    repo_name = f"{owner}/{repo_path.name}"
 
     # Count candidates first
     num_candidates = count_candidate_seeds(graph_path)
