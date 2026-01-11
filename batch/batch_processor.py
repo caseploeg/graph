@@ -60,7 +60,11 @@ def process_single_repo(args: tuple[Path, Path]) -> ProcessResult:
         from codebase_rag.parser_loader import load_parsers
         from codebase_rag.services import JsonFileIngestor
 
-        output_file = output_dir / f"{repo_path.name}.json"
+        # Use owner__repo pattern for unique filenames
+        # Clone structure is {clone_dir}/{owner}/{repo}, so parent.name is owner
+        owner = repo_path.parent.name
+        repo_name = repo_path.name
+        output_file = output_dir / f"{owner}__{repo_name}.json"
 
         ingestor = JsonFileIngestor(str(output_file))
         parsers, queries = load_parsers()
