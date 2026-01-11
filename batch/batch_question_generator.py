@@ -38,7 +38,12 @@ from generate_diverse_questions import (
     generate_diverse_prompts,
 )
 from question_debug_stats import QuestionDebugStats
-from question_generator import get_all_candidate_seeds, get_sparse_candidate_seeds
+from question_generator import (
+    get_all_candidate_seeds,
+    get_sparse_candidate_seeds,
+    get_related_text_files,
+    format_raw_text_context,
+)
 
 
 def count_candidate_seeds(
@@ -217,6 +222,17 @@ def generate_questions_for_repo(
             "reason": f"Too few candidates ({num_candidates} < {min_questions})",
         }
 
+    # Always include raw text context if under 1000 questions
+    raw_text_context = None
+    raw_text_used = False
+    if max_questions < 1000:
+        raw_files = get_related_text_files(repo_path)
+        if raw_files:
+            raw_text_context = format_raw_text_context(raw_files)
+            raw_text_used = True
+            if not quiet:
+                print(f"  Including raw text from {len(raw_files)} files")
+
     if not quiet:
         print(f"  Candidates: {num_candidates}, generating up to {max_questions} questions")
 
@@ -229,6 +245,7 @@ def generate_questions_for_repo(
             random_seed=random_seed,
             quiet=quiet,
             prompt_timeout=prompt_timeout,
+            raw_text_context=raw_text_context,
         )
 
         # Write to JSONL
@@ -245,6 +262,7 @@ def generate_questions_for_repo(
             "generated": len(prompts),
             "skipped": False,
             "sparse_mode": sparse_mode_used,
+            "raw_text_used": raw_text_used,
         }
 
     except Exception as e:
@@ -256,6 +274,7 @@ def generate_questions_for_repo(
             "skipped": True,
             "reason": str(e),
             "sparse_mode": sparse_mode_used,
+            "raw_text_used": raw_text_used,
         }
 
 
@@ -464,8 +483,8 @@ def main() -> None:
     parser.add_argument(
         "--target-per-repo",
         type=int,
-        default=10000,
-        help="Target questions per repo (default: 10000)",
+        default=1000,
+        help="Target questions per repo (default: 1000)",
     )
     parser.add_argument(
         "--min-questions",

@@ -179,6 +179,7 @@ def generate_diverse_prompts(
     random_seed: int | None = None,
     quiet: bool = False,
     prompt_timeout: int = DEFAULT_PROMPT_TIMEOUT,
+    raw_text_context: str | None = None,
 ) -> list[DiversePromptRecord]:
     """Generate prompts with strategy rotation for diversity.
 
@@ -192,6 +193,7 @@ def generate_diverse_prompts(
         random_seed: Optional random seed for reproducibility
         quiet: Suppress verbose output (for parallel workers)
         prompt_timeout: Timeout in seconds per prompt generation (default: 30)
+        raw_text_context: Optional raw text context to include in prompts
 
     Returns list of DiversePromptRecord objects with rich metadata.
     """
@@ -244,7 +246,8 @@ def generate_diverse_prompts(
     extractor = NodeTextExtractor(graph_path, repo_path)
 
     prompts: list[DiversePromptRecord] = []
-    used_seeds: set[int] = set()
+    # Track (seed_id, strategy) combinations to allow seed reuse with different strategies
+    used_combinations: set[tuple[int, str]] = set()
     strategy_idx = 0
     strategy_counts: Counter[str] = Counter()
     timeout_count = 0
@@ -262,18 +265,27 @@ def generate_diverse_prompts(
         strategy = strategy_queue[strategy_idx % len(strategy_queue)]
         strategy_idx += 1
 
-        # Sample from cached candidates (O(1) lookup instead of recomputing all)
-        available = [(n, c) for nid, (n, c) in candidate_dict.items() if nid not in used_seeds]
+        # Sample from cached candidates, filtering out (seed, strategy) combinations already used
+        available = [
+            (n, c) for nid, (n, c) in candidate_dict.items()
+            if (nid, strategy) not in used_combinations
+        ]
         if not available:
-            if not quiet:
-                print(f"\nExhausted seed pool at prompt {len(prompts)}", file=sys.stderr)
-            break
+            # Check if we've exhausted all combinations
+            total_possible = len(candidate_dict) * len(set(strategy_queue))
+            if len(used_combinations) >= total_possible:
+                if not quiet:
+                    print(f"\nExhausted all seed+strategy combinations at prompt {len(prompts)}", file=sys.stderr)
+                break
+            # Otherwise, rebuild queue and continue (may find available combos with other strategies)
+            strategy_queue = build_strategy_queue(weights)
+            continue
 
         # Weighted random selection
         weights_list = [c for _, c in available]
         seed = random.choices(available, weights=weights_list, k=1)[0][0]
 
-        used_seeds.add(seed.node_id)
+        used_combinations.add((seed.node_id, strategy))
         seed_name = seed.properties.get("name", f"node_{seed.node_id}")
         seed_qualified_name = seed.properties.get("qualified_name", "")
 
@@ -297,8 +309,20 @@ def generate_diverse_prompts(
                         print("  -> Skipped (no source)", file=sys.stderr)
                     continue
 
+                # Build raw text section if context provided
+                raw_text_section = ""
+                if raw_text_context:
+                    raw_text_section = f"""
+<additional_context>
+{raw_text_context}
+</additional_context>
+
+"""
+
                 prompt_text = META_PROMPT.format(
-                    graph_context=graph_context, source_context=source_context
+                    graph_context=graph_context,
+                    source_context=source_context,
+                    raw_text_section=raw_text_section,
                 )
 
                 # Collect file paths from context nodes
@@ -333,7 +357,9 @@ def generate_diverse_prompts(
         print("GENERATION COMPLETE", file=sys.stderr)
         print("=" * 60, file=sys.stderr)
         print(f"Total prompts: {len(prompts)}", file=sys.stderr)
-        print(f"Unique seeds used: {len(used_seeds)}", file=sys.stderr)
+        unique_seeds = len(set(combo[0] for combo in used_combinations))
+        print(f"Unique seeds used: {unique_seeds}", file=sys.stderr)
+        print(f"Seed+strategy combinations: {len(used_combinations)}", file=sys.stderr)
         if timeout_count > 0:
             print(f"Timeouts: {timeout_count}", file=sys.stderr)
         print(file=sys.stderr)

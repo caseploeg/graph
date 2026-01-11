@@ -55,7 +55,7 @@ class LargeScaleConfig:
     # Question generation
     generate_questions: bool = False
     questions_dir: Path | None = None
-    target_questions_per_repo: int = 10000
+    target_questions_per_repo: int = 1000
     min_questions: int = 10
     questions_only: bool = False  # Skip clone/process, only generate questions
     question_workers: int | None = None  # Workers for question generation (default: auto)
@@ -537,8 +537,8 @@ def main() -> None:
     parser.add_argument(
         "--target-questions",
         type=int,
-        default=10000,
-        help="Target questions per repo (default: 10000, capped by candidates)",
+        default=1000,
+        help="Target questions per repo (default: 1000, capped by candidates)",
     )
     parser.add_argument(
         "--min-questions",

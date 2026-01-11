@@ -494,6 +494,147 @@ EXPANSION_STRATEGIES = {
 }
 
 
+# Text file extensions to include in raw text context
+TEXT_FILE_EXTENSIONS = {
+    # Documentation
+    ".md", ".rst", ".txt", ".adoc",
+    # Config
+    ".toml", ".yaml", ".yml", ".json", ".ini", ".cfg", ".conf",
+    # Build/manifest
+    ".lock",
+    # Other
+    ".env.example", ".gitignore", ".dockerignore",
+}
+
+# Priority files to always check first (in order)
+PRIORITY_FILES = [
+    "README.md", "README.rst", "README.txt", "README",
+    "pyproject.toml", "setup.py", "setup.cfg",
+    "package.json", "Cargo.toml", "go.mod",
+    "requirements.txt", "requirements.in",
+    "CONTRIBUTING.md", "CHANGELOG.md", "CHANGES.md",
+]
+
+
+def get_related_text_files(
+    repo_path: Path,
+    seed_file_path: str | None = None,
+    max_files: int = 10,
+    max_chars_per_file: int = 2000,
+) -> list[tuple[str, str]]:
+    """Get text files related to seed context.
+
+    Priority order:
+    1. Files in same directory as seed
+    2. README/docs in parent directories
+    3. Config files (pyproject.toml, package.json, etc.)
+    4. Other text files nearby
+
+    Args:
+        repo_path: Path to the repository root
+        seed_file_path: Optional path to seed file (relative to repo)
+        max_files: Maximum number of files to return
+        max_chars_per_file: Maximum characters to read from each file
+
+    Returns:
+        List of (relative_path, content) tuples
+    """
+    result: list[tuple[str, str]] = []
+    seen_paths: set[str] = set()
+
+    def add_file(file_path: Path) -> bool:
+        """Try to add a file to result. Returns True if added."""
+        if len(result) >= max_files:
+            return False
+
+        rel_path = str(file_path.relative_to(repo_path))
+        if rel_path in seen_paths:
+            return False
+
+        if not file_path.exists() or not file_path.is_file():
+            return False
+
+        # Check extension
+        suffix = file_path.suffix.lower()
+        if suffix not in TEXT_FILE_EXTENSIONS and file_path.name not in PRIORITY_FILES:
+            return False
+
+        try:
+            content = file_path.read_text(encoding="utf-8", errors="ignore")
+            if len(content) > max_chars_per_file:
+                content = content[:max_chars_per_file] + "\n... [truncated]"
+            if content.strip():
+                result.append((rel_path, content))
+                seen_paths.add(rel_path)
+                return True
+        except (OSError, UnicodeDecodeError):
+            pass
+        return False
+
+    # 1. Priority: Root-level important files
+    for filename in PRIORITY_FILES:
+        if len(result) >= max_files:
+            break
+        add_file(repo_path / filename)
+
+    # 2. If seed path provided, check files in same directory and parents
+    if seed_file_path:
+        seed_dir = repo_path / Path(seed_file_path).parent
+        if seed_dir.exists():
+            # Check README in seed directory
+            for readme in ["README.md", "README.rst", "README.txt"]:
+                add_file(seed_dir / readme)
+
+            # Check other text files in seed directory
+            try:
+                for f in seed_dir.iterdir():
+                    if f.is_file() and f.suffix.lower() in TEXT_FILE_EXTENSIONS:
+                        add_file(f)
+            except OSError:
+                pass
+
+            # Walk up to find parent READMEs
+            parent = seed_dir.parent
+            for _ in range(3):  # Max 3 levels up
+                if parent == repo_path or parent == parent.parent:
+                    break
+                for readme in ["README.md", "README.rst"]:
+                    add_file(parent / readme)
+                parent = parent.parent
+
+    # 3. Check docs directory
+    docs_dirs = ["docs", "doc", "documentation"]
+    for docs_name in docs_dirs:
+        docs_dir = repo_path / docs_name
+        if docs_dir.exists() and docs_dir.is_dir():
+            try:
+                for f in sorted(docs_dir.glob("*.md"))[:3]:
+                    add_file(f)
+            except OSError:
+                pass
+
+    return result
+
+
+def format_raw_text_context(files: list[tuple[str, str]]) -> str:
+    """Format raw text files for inclusion in prompt context.
+
+    Args:
+        files: List of (relative_path, content) tuples
+
+    Returns:
+        Formatted string for prompt inclusion
+    """
+    if not files:
+        return ""
+
+    sections = []
+    for rel_path, content in files:
+        sections.append(f"<file path=\"{rel_path}\">\n{content}\n</file>")
+
+    return "\n\n".join(sections)
+
+
 def format_code_chunk(
     node: GraphNode,
     result: NodeTextResult,
@@ -900,7 +1041,7 @@ You are shown a subsection of a larger codebase. First, review the graph structu
 <source_code>
 {source_context}
 </source_code>
-
+{raw_text_section}
 ## STEP 1: Assess Context Quality
 
 Before writing a question, evaluate the quality of the context you've been given.
@@ -1044,7 +1185,11 @@ def generate_question(
     if not source_context.strip():
         return None, seed.node_id
 
-    prompt = META_PROMPT.format(graph_context=graph_context, source_context=source_context)
+    prompt = META_PROMPT.format(
+        graph_context=graph_context,
+        source_context=source_context,
+        raw_text_section="",
+    )
     response = call_llm(prompt)
 
     try:

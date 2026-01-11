@@ -145,7 +145,11 @@ def main() -> None:
     print(f"Building context (max_tokens={args.max_tokens})...", file=sys.stderr)
     graph_context, source_context = build_context(graph, extractor, context_nodes, seed.node_id, args.max_tokens)
 
-    prompt = META_PROMPT.format(graph_context=graph_context, source_context=source_context)
+    prompt = META_PROMPT.format(
+        graph_context=graph_context,
+        source_context=source_context,
+        raw_text_section="",
+    )
 
     estimated_tokens = len(prompt) // CHARS_PER_TOKEN_ESTIMATE
 
