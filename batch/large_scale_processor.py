@@ -61,6 +61,7 @@ class LargeScaleConfig:
     question_workers: int | None = None  # Workers for question generation (default: auto)
     questions_debug: bool = False  # Show debug stats during question generation
     sparse_fallback: bool = True  # Try sparse mode if regular mode has too few candidates
+    questions_verbose: bool = False  # Run question gen sequentially with full output
 
 
 @dataclass
@@ -282,6 +283,7 @@ class LargeScaleBatchProcessor:
             workers=self.config.question_workers,
             debug=self.config.questions_debug,
             sparse_fallback=self.config.sparse_fallback,
+            verbose=self.config.questions_verbose,
         )
 
         return results
@@ -558,6 +560,11 @@ def main() -> None:
         help="Show debug stats during question generation (node counts, relationship counts, rejection reasons)",
     )
     parser.add_argument(
+        "--questions-verbose",
+        action="store_true",
+        help="Run question generation sequentially with full output (disables parallel processing)",
+    )
+    parser.add_argument(
         "--no-sparse-fallback",
         action="store_true",
         help="Disable sparse mode fallback for repos with few CALLS connections",
@@ -606,6 +613,7 @@ def main() -> None:
         question_workers=args.question_workers,
         questions_debug=args.questions_debug,
         sparse_fallback=not args.no_sparse_fallback,
+        questions_verbose=args.questions_verbose,
     )
 
     print("=" * 60)
@@ -630,6 +638,7 @@ def main() -> None:
         print(f"Q. output:   {config.questions_dir or 'auto'}")
         print(f"Q. workers:  {config.question_workers or 'auto'}")
         print(f"Q. debug:    {config.questions_debug}")
+        print(f"Q. verbose:  {config.questions_verbose}")
         print(f"Sparse mode: {config.sparse_fallback}")
     print("=" * 60)
     print()

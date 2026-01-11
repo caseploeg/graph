@@ -302,6 +302,7 @@ def batch_generate_questions(
     prompt_timeout: int = DEFAULT_PROMPT_TIMEOUT,
     debug: bool = False,
     sparse_fallback: bool = True,
+    verbose: bool = False,
 ) -> list[dict]:
     """
     Generate questions for all graphs in a directory using parallel processing.
@@ -318,6 +319,7 @@ def batch_generate_questions(
         prompt_timeout: Timeout in seconds per prompt generation
         debug: Show detailed debug statistics per repo
         sparse_fallback: Try sparse mode if regular mode has too few candidates
+        verbose: Run sequentially with full output (disables parallel processing)
 
     Returns:
         List of result dicts with stats per repo
@@ -331,13 +333,17 @@ def batch_generate_questions(
     if limit:
         graph_files = graph_files[:limit]
 
-    workers = workers or get_optimal_workers()
+    if verbose:
+        workers = 1  # Force sequential for verbose mode
+    else:
+        workers = workers or get_optimal_workers()
 
     print(f"Found {len(graph_files)} graphs to process")
     print(f"Target questions per repo: {target_per_repo}")
     print(f"Minimum candidates required: {min_questions}")
     print(f"Sparse fallback: {sparse_fallback}")
     print(f"Debug mode: {debug}")
+    print(f"Verbose mode: {verbose}")
     print(f"Workers: {workers}")
     print("-" * 60)
 
@@ -366,26 +372,38 @@ def batch_generate_questions(
 
     print(f"Processing {len(args_list)} repos ({len(skipped_results)} skipped - repo not found)")
 
-    # Process in parallel
     results: list[dict] = list(skipped_results)  # Start with skipped results
     total_generated = 0
     completed = 0
     total_to_process = len(args_list)
 
-    with ProcessPoolExecutor(max_workers=workers) as executor:
-        futures = {executor.submit(generate_questions_worker, args): args for args in args_list}
-
-        for future in as_completed(futures):
-            args = futures[future]
-            repo_name = args[0].stem
+    if verbose:
+        # Sequential processing with full output
+        for args in args_list:
+            graph_path, repo_path, output_path, target_q, min_q, timeout, sparse_fb = args
+            repo_name = graph_path.stem
             completed += 1
 
+            print(f"\n{'='*60}")
+            print(f"[{completed}/{total_to_process}] Processing: {repo_name}")
+            print(f"{'='*60}")
+
             try:
-                result = future.result()
+                result = generate_questions_for_repo(
+                    graph_path=graph_path,
+                    repo_path=repo_path,
+                    output_path=output_path,
+                    target_questions=target_q,
+                    min_questions=min_q,
+                    quiet=False,  # Full output in verbose mode
+                    prompt_timeout=timeout,
+                    debug=debug,
+                    sparse_fallback=sparse_fb,
+                )
             except Exception as e:
                 result = {
                     "repo": repo_name,
-                    "graph": str(args[0]),
+                    "graph": str(graph_path),
                     "generated": 0,
                     "skipped": True,
                     "reason": str(e),
@@ -394,14 +412,40 @@ def batch_generate_questions(
             results.append(result)
             total_generated += result.get("generated", 0)
 
-            # Progress output
-            status = "OK" if not result.get("skipped") else "SKIP"
-            gen_count = result.get("generated", 0)
-            sparse_tag = " [sparse]" if result.get("sparse_mode") else ""
-            print(f"[{completed}/{total_to_process}] {status}: {repo_name} ({gen_count:,} questions){sparse_tag}")
-
             if on_complete:
                 on_complete(result)
+    else:
+        # Parallel processing with suppressed output
+        with ProcessPoolExecutor(max_workers=workers) as executor:
+            futures = {executor.submit(generate_questions_worker, args): args for args in args_list}
+
+            for future in as_completed(futures):
+                args = futures[future]
+                repo_name = args[0].stem
+                completed += 1
+
+                try:
+                    result = future.result()
+                except Exception as e:
+                    result = {
+                        "repo": repo_name,
+                        "graph": str(args[0]),
+                        "generated": 0,
+                        "skipped": True,
+                        "reason": str(e),
+                    }
+
+                results.append(result)
+                total_generated += result.get("generated", 0)
+
+                # Progress output
+                status = "OK" if not result.get("skipped") else "SKIP"
+                gen_count = result.get("generated", 0)
+                sparse_tag = " [sparse]" if result.get("sparse_mode") else ""
+                print(f"[{completed}/{total_to_process}] {status}: {repo_name} ({gen_count:,} questions){sparse_tag}")
+
+                if on_complete:
+                    on_complete(result)
 
     print("-" * 60)
     print("SUMMARY")
@@ -501,6 +545,11 @@ def main() -> None:
         action="store_true",
         help="Disable sparse mode fallback for repos with few CALLS connections",
     )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Run sequentially with full output (disables parallel processing)",
+    )
 
     args = parser.parse_args()
 
@@ -523,6 +572,7 @@ def main() -> None:
         prompt_timeout=args.timeout,
         debug=args.debug,
         sparse_fallback=not args.no_sparse_fallback,
+        verbose=args.verbose,
     )
 
 
