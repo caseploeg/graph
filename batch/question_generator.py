@@ -30,6 +30,8 @@ from codebase_rag.graph_loader import GraphLoader
 from codebase_rag.models import GraphNode
 from codebase_rag.node_text_extractor import NodeTextExtractor, NodeTextResult
 
+from question_debug_stats import QuestionDebugStats
+
 
 @dataclass
 class GeneratedQuestion:
@@ -52,13 +54,30 @@ CHARS_PER_TOKEN_ESTIMATE = 4
 
 
 def get_all_candidate_seeds(
-    graph: GraphLoader, min_connections: int = 3
+    graph: GraphLoader,
+    min_connections: int = 3,
+    debug_stats: QuestionDebugStats | None = None,
 ) -> list[tuple[GraphNode, int]]:
-    """Get all valid seed candidates, sorted by connection count."""
+    """Get all valid seed candidates, sorted by connection count.
+
+    Args:
+        graph: The loaded graph
+        min_connections: Minimum CALLS relationships required (in + out)
+        debug_stats: Optional stats collector for debugging
+    """
     candidates: list[tuple[GraphNode, int]] = []
 
     for label in ["Function", "Method"]:
-        for node in graph.find_nodes_by_label(label):
+        nodes = graph.find_nodes_by_label(label)
+
+        # Track counts for debug
+        if debug_stats:
+            if label == "Function":
+                debug_stats.total_functions = len(nodes)
+            else:
+                debug_stats.total_methods = len(nodes)
+
+        for node in nodes:
             outgoing = graph.get_outgoing_relationships(node.node_id)
             incoming = graph.get_incoming_relationships(node.node_id)
 
@@ -68,6 +87,107 @@ def get_all_candidate_seeds(
             connection_count = calls_out + calls_in
             if connection_count >= min_connections:
                 candidates.append((node, connection_count))
+                if debug_stats:
+                    debug_stats.candidates_accepted += 1
+            elif debug_stats:
+                node_name = node.properties.get("name", f"node_{node.node_id}")
+                reason = f"{connection_count} CALLS (need {min_connections}+)"
+                debug_stats.add_rejection(
+                    node_id=node.node_id,
+                    node_name=node_name,
+                    node_type=label,
+                    reason=reason,
+                    connection_count=connection_count,
+                )
+
+    candidates.sort(key=lambda x: (-x[1], x[0].node_id))
+    return candidates
+
+
+def get_sparse_candidate_seeds(
+    graph: GraphLoader,
+    min_connections: int = 1,
+    debug_stats: QuestionDebugStats | None = None,
+) -> list[tuple[GraphNode, int, str]]:
+    """Get candidates using all relationship types for sparse repos.
+
+    Returns tuples of (node, connection_count, best_relationship_type).
+    Includes Module and Class nodes in addition to Function/Method.
+    """
+    candidates: list[tuple[GraphNode, int, str]] = []
+
+    # Function/Method candidates - count all relationships, not just CALLS
+    for label in ["Function", "Method"]:
+        nodes = graph.find_nodes_by_label(label)
+        if debug_stats:
+            if label == "Function":
+                debug_stats.total_functions = len(nodes)
+            else:
+                debug_stats.total_methods = len(nodes)
+
+        for node in nodes:
+            outgoing = graph.get_outgoing_relationships(node.node_id)
+            incoming = graph.get_incoming_relationships(node.node_id)
+
+            # Count multiple relationship types
+            calls = len([r for r in outgoing if r.type == "CALLS"]) + \
+                    len([r for r in incoming if r.type == "CALLS"])
+            defines = len([r for r in incoming if r.type in ("DEFINES", "DEFINES_METHOD")])
+
+            total = calls + defines
+            best_type = "CALLS" if calls >= defines else "DEFINES"
+
+            if total >= min_connections:
+                candidates.append((node, total, best_type))
+                if debug_stats:
+                    debug_stats.candidates_accepted += 1
+            elif debug_stats:
+                node_name = node.properties.get("name", f"node_{node.node_id}")
+                debug_stats.add_rejection(
+                    node_id=node.node_id,
+                    node_name=node_name,
+                    node_type=label,
+                    reason=f"{total} connections (need {min_connections}+)",
+                    connection_count=total,
+                )
+
+    # Class candidates - for inheritance questions
+    class_nodes = graph.find_nodes_by_label("Class")
+    if debug_stats:
+        debug_stats.total_classes = len(class_nodes)
+
+    for node in class_nodes:
+        outgoing = graph.get_outgoing_relationships(node.node_id)
+        incoming = graph.get_incoming_relationships(node.node_id)
+
+        inherits_out = len([r for r in outgoing if r.type == "INHERITS"])
+        inherits_in = len([r for r in incoming if r.type == "INHERITS"])
+        methods = len([r for r in outgoing if r.type == "DEFINES_METHOD"])
+
+        total = inherits_out + inherits_in + methods
+        if total >= min_connections:
+            candidates.append((node, total, "INHERITS"))
+            if debug_stats:
+                debug_stats.candidates_accepted += 1
+
+    # Module candidates - for import/definition questions
+    module_nodes = graph.find_nodes_by_label("Module")
+    if debug_stats:
+        debug_stats.total_modules = len(module_nodes)
+
+    for node in module_nodes:
+        outgoing = graph.get_outgoing_relationships(node.node_id)
+        incoming = graph.get_incoming_relationships(node.node_id)
+
+        imports_out = len([r for r in outgoing if r.type == "IMPORTS"])
+        imports_in = len([r for r in incoming if r.type == "IMPORTS"])
+        defines = len([r for r in outgoing if r.type == "DEFINES"])
+
+        total = imports_out + imports_in + defines
+        if total >= min_connections:
+            candidates.append((node, total, "IMPORTS"))
+            if debug_stats:
+                debug_stats.candidates_accepted += 1
 
     candidates.sort(key=lambda x: (-x[1], x[0].node_id))
     return candidates
@@ -273,12 +393,104 @@ def expand_file_centric(
     return visited
 
 
+def expand_import_tree(
+    graph: GraphLoader, seed_id: int, depth: int = 3, max_nodes: int = 30
+) -> set[int]:
+    """Expand context following IMPORTS relationships for module-focused questions."""
+    visited: set[int] = {seed_id}
+    frontier: set[int] = {seed_id}
+
+    for _ in range(depth):
+        if len(visited) >= max_nodes:
+            break
+        next_frontier: set[int] = set()
+        for node_id in frontier:
+            # Follow both outgoing and incoming IMPORTS
+            for rel in graph.get_outgoing_relationships(node_id):
+                if rel.type == "IMPORTS" and rel.to_id not in visited:
+                    next_frontier.add(rel.to_id)
+            for rel in graph.get_incoming_relationships(node_id):
+                if rel.type == "IMPORTS" and rel.from_id not in visited:
+                    next_frontier.add(rel.from_id)
+            # Also include definitions from these modules
+            for rel in graph.get_outgoing_relationships(node_id):
+                if rel.type == "DEFINES" and rel.to_id not in visited:
+                    if len(visited) + len(next_frontier) < max_nodes:
+                        next_frontier.add(rel.to_id)
+
+        visited |= next_frontier
+        frontier = next_frontier
+
+    return visited
+
+
+def expand_inheritance_tree(
+    graph: GraphLoader, seed_id: int, max_nodes: int = 30
+) -> set[int]:
+    """Expand context following INHERITS relationships + class methods."""
+    visited: set[int] = {seed_id}
+    frontier: set[int] = {seed_id}
+
+    # First, traverse inheritance chain (up and down)
+    for _ in range(5):  # Max depth
+        if len(visited) >= max_nodes // 2:
+            break
+        next_frontier: set[int] = set()
+        for node_id in frontier:
+            for rel in graph.get_outgoing_relationships(node_id):
+                if rel.type == "INHERITS" and rel.to_id not in visited:
+                    next_frontier.add(rel.to_id)
+            for rel in graph.get_incoming_relationships(node_id):
+                if rel.type == "INHERITS" and rel.from_id not in visited:
+                    next_frontier.add(rel.from_id)
+        visited |= next_frontier
+        frontier = next_frontier
+        if not next_frontier:
+            break
+
+    # Add methods defined by these classes
+    for class_id in list(visited):
+        if len(visited) >= max_nodes:
+            break
+        for rel in graph.get_outgoing_relationships(class_id):
+            if rel.type == "DEFINES_METHOD" and len(visited) < max_nodes:
+                visited.add(rel.to_id)
+
+    return visited
+
+
+def expand_definitions(
+    graph: GraphLoader, seed_id: int, max_nodes: int = 30
+) -> set[int]:
+    """Expand to all definitions from a module."""
+    visited: set[int] = {seed_id}
+
+    # Get all definitions from this module
+    for rel in graph.get_outgoing_relationships(seed_id):
+        if rel.type in {"DEFINES", "DEFINES_METHOD"} and len(visited) < max_nodes:
+            visited.add(rel.to_id)
+
+    # For each function/class defined, get their calls/methods
+    for node_id in list(visited):
+        if len(visited) >= max_nodes:
+            break
+        for rel in graph.get_outgoing_relationships(node_id):
+            if rel.type in {"CALLS", "DEFINES_METHOD"} and len(visited) < max_nodes:
+                visited.add(rel.to_id)
+
+    return visited
+
+
 EXPANSION_STRATEGIES = {
     "bfs": expand_context,
     "chain": expand_chain_with_siblings,
     "callers": expand_caller_tree,
     "callees": expand_callee_tree,
     "file": expand_file_centric,
+    # Sparse repo strategies
+    "imports": expand_import_tree,
+    "inheritance": expand_inheritance_tree,
+    "definitions": expand_definitions,
 }
 
 
