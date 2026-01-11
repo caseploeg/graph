@@ -313,7 +313,10 @@ def expand_chain_with_siblings(
     siblings_per_node: int = 2,
     max_callers: int = 3,
 ) -> set[int]:
-    """Follow call chains deeply, adding siblings at each level."""
+    """Follow call chains deeply, adding siblings at each level.
+
+    Non-deterministic: shuffles callees and siblings for diversity.
+    """
     visited: set[int] = {seed_id}
 
     chain = [seed_id]
@@ -326,15 +329,17 @@ def expand_chain_with_siblings(
         ]
         if not callees:
             break
-        next_node = max(
-            callees, key=lambda n: len(graph.get_outgoing_relationships(n))
-        )
+        # Shuffle callees and pick randomly from top candidates for diversity
+        random.shuffle(callees)
+        next_node = callees[0]
         chain.append(next_node)
         visited.add(next_node)
         current = next_node
 
     for node_id in chain:
         siblings = get_siblings(graph, node_id)
+        # Shuffle siblings for diversity
+        random.shuffle(siblings)
         for sib in siblings[:siblings_per_node]:
             visited.add(sib)
 
@@ -343,6 +348,8 @@ def expand_chain_with_siblings(
         for r in graph.get_incoming_relationships(seed_id)
         if r.type == "CALLS"
     ]
+    # Shuffle callers for diversity
+    random.shuffle(callers)
     for caller in callers[:max_callers]:
         visited.add(caller)
 
@@ -352,7 +359,10 @@ def expand_chain_with_siblings(
 def expand_caller_tree(
     graph: GraphLoader, seed_id: int, depth: int = 3, max_nodes: int = 30
 ) -> set[int]:
-    """Focus on who calls this function - upstream focus."""
+    """Focus on who calls this function - upstream focus.
+
+    Non-deterministic: randomly samples when exceeding max_nodes.
+    """
     visited: set[int] = {seed_id}
     frontier: set[int] = {seed_id}
 
@@ -364,8 +374,12 @@ def expand_caller_tree(
             for rel in graph.get_incoming_relationships(node_id):
                 if rel.type == "CALLS" and rel.from_id not in visited:
                     next_frontier.add(rel.from_id)
-                    if len(visited) + len(next_frontier) >= max_nodes:
-                        break
+
+        # Randomly sample if we'd exceed max_nodes
+        if len(visited) + len(next_frontier) > max_nodes:
+            available = max_nodes - len(visited)
+            next_frontier = set(random.sample(list(next_frontier), available))
+
         visited |= next_frontier
         frontier = next_frontier
 
@@ -375,7 +389,10 @@ def expand_caller_tree(
 def expand_callee_tree(
     graph: GraphLoader, seed_id: int, depth: int = 4, max_nodes: int = 30
 ) -> set[int]:
-    """Focus on what this function calls - downstream focus."""
+    """Focus on what this function calls - downstream focus.
+
+    Non-deterministic: randomly samples when exceeding max_nodes.
+    """
     visited: set[int] = {seed_id}
     frontier: set[int] = {seed_id}
 
@@ -387,8 +404,12 @@ def expand_callee_tree(
             for rel in graph.get_outgoing_relationships(node_id):
                 if rel.type == "CALLS" and rel.to_id not in visited:
                     next_frontier.add(rel.to_id)
-                    if len(visited) + len(next_frontier) >= max_nodes:
-                        break
+
+        # Randomly sample if we'd exceed max_nodes
+        if len(visited) + len(next_frontier) > max_nodes:
+            available = max_nodes - len(visited)
+            next_frontier = set(random.sample(list(next_frontier), available))
+
         visited |= next_frontier
         frontier = next_frontier
 
@@ -398,7 +419,10 @@ def expand_callee_tree(
 def expand_file_centric(
     graph: GraphLoader, seed_id: int, max_external: int = 5
 ) -> set[int]:
-    """Get all functions in same file + external dependencies."""
+    """Get all functions in same file + external dependencies.
+
+    Non-deterministic: shuffles external calls for diversity.
+    """
     visited: set[int] = {seed_id}
 
     module = get_defining_module(graph, seed_id)
@@ -413,6 +437,8 @@ def expand_file_centric(
             if rel.type == "CALLS" and rel.to_id not in visited:
                 external_calls.append(rel.to_id)
 
+    # Shuffle external calls for diversity
+    random.shuffle(external_calls)
     for ext in external_calls[:max_external]:
         visited.add(ext)
 
@@ -422,7 +448,10 @@ def expand_file_centric(
 def expand_import_tree(
     graph: GraphLoader, seed_id: int, depth: int = 3, max_nodes: int = 30
 ) -> set[int]:
-    """Expand context following IMPORTS relationships for module-focused questions."""
+    """Expand context following IMPORTS relationships for module-focused questions.
+
+    Non-deterministic: randomly samples when exceeding max_nodes.
+    """
     visited: set[int] = {seed_id}
     frontier: set[int] = {seed_id}
 
@@ -441,8 +470,12 @@ def expand_import_tree(
             # Also include definitions from these modules
             for rel in graph.get_outgoing_relationships(node_id):
                 if rel.type == "DEFINES" and rel.to_id not in visited:
-                    if len(visited) + len(next_frontier) < max_nodes:
-                        next_frontier.add(rel.to_id)
+                    next_frontier.add(rel.to_id)
+
+        # Randomly sample if we'd exceed max_nodes
+        if len(visited) + len(next_frontier) > max_nodes:
+            available = max_nodes - len(visited)
+            next_frontier = set(random.sample(list(next_frontier), available))
 
         visited |= next_frontier
         frontier = next_frontier
@@ -453,7 +486,10 @@ def expand_import_tree(
 def expand_inheritance_tree(
     graph: GraphLoader, seed_id: int, max_nodes: int = 30
 ) -> set[int]:
-    """Expand context following INHERITS relationships + class methods."""
+    """Expand context following INHERITS relationships + class methods.
+
+    Non-deterministic: randomly samples methods when exceeding max_nodes.
+    """
     visited: set[int] = {seed_id}
     frontier: set[int] = {seed_id}
 
@@ -474,13 +510,17 @@ def expand_inheritance_tree(
         if not next_frontier:
             break
 
-    # Add methods defined by these classes
+    # Add methods defined by these classes (shuffled for diversity)
+    all_methods = []
     for class_id in list(visited):
-        if len(visited) >= max_nodes:
-            break
         for rel in graph.get_outgoing_relationships(class_id):
-            if rel.type == "DEFINES_METHOD" and len(visited) < max_nodes:
-                visited.add(rel.to_id)
+            if rel.type == "DEFINES_METHOD" and rel.to_id not in visited:
+                all_methods.append(rel.to_id)
+
+    random.shuffle(all_methods)
+    available = max_nodes - len(visited)
+    for method_id in all_methods[:available]:
+        visited.add(method_id)
 
     return visited
 
@@ -488,21 +528,36 @@ def expand_inheritance_tree(
 def expand_definitions(
     graph: GraphLoader, seed_id: int, max_nodes: int = 30
 ) -> set[int]:
-    """Expand to all definitions from a module."""
+    """Expand to all definitions from a module.
+
+    Non-deterministic: randomly samples related nodes when exceeding max_nodes.
+    """
     visited: set[int] = {seed_id}
 
     # Get all definitions from this module
-    for rel in graph.get_outgoing_relationships(seed_id):
-        if rel.type in {"DEFINES", "DEFINES_METHOD"} and len(visited) < max_nodes:
-            visited.add(rel.to_id)
-
-    # For each function/class defined, get their calls/methods
-    for node_id in list(visited):
+    definitions = [
+        rel.to_id
+        for rel in graph.get_outgoing_relationships(seed_id)
+        if rel.type in {"DEFINES", "DEFINES_METHOD"}
+    ]
+    random.shuffle(definitions)
+    for def_id in definitions:
         if len(visited) >= max_nodes:
             break
+        visited.add(def_id)
+
+    # For each function/class defined, get their calls/methods (shuffled)
+    related = []
+    for node_id in list(visited):
         for rel in graph.get_outgoing_relationships(node_id):
-            if rel.type in {"CALLS", "DEFINES_METHOD"} and len(visited) < max_nodes:
-                visited.add(rel.to_id)
+            if rel.type in {"CALLS", "DEFINES_METHOD"} and rel.to_id not in visited:
+                related.append(rel.to_id)
+
+    random.shuffle(related)
+    for rel_id in related:
+        if len(visited) >= max_nodes:
+            break
+        visited.add(rel_id)
 
     return visited
 
