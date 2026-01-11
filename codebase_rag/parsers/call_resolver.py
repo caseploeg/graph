@@ -170,7 +170,7 @@ class CallResolver:
     def _try_resolve_wildcard_imports(
         self, call_name: str, import_map: dict[str, str]
     ) -> tuple[str, str] | None:
-        for local_name, imported_qn in import_map.items():
+        for local_name, imported_qn in sorted(import_map.items()):
             if not local_name.startswith("*"):
                 continue
             if result := self._try_wildcard_qns(call_name, imported_qn):

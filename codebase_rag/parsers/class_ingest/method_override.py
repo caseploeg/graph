@@ -21,7 +21,7 @@ def process_all_method_overrides(
 ) -> None:
     logger.info(logs.CLASS_PASS_4)
 
-    for method_qn in function_registry.keys():
+    for method_qn in sorted(function_registry.keys()):
         if (
             function_registry[method_qn] == NodeType.METHOD
             and cs.SEPARATOR_DOT in method_qn

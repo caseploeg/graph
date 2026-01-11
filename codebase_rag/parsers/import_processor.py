@@ -103,7 +103,7 @@ class ImportProcessor:
             )
 
             if self.ingestor:
-                for local_name, full_name in self.import_mapping[module_qn].items():
+                for local_name, full_name in sorted(self.import_mapping[module_qn].items()):
                     module_path = self.stdlib_extractor.extract_module_path(
                         full_name, language
                     )

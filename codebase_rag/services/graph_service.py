@@ -215,7 +215,7 @@ class MemgraphIngestor:
             nodes_by_label[label].append(props)
         flushed_total = 0
         skipped_total = 0
-        for label, props_list in nodes_by_label.items():
+        for label, props_list in sorted(nodes_by_label.items()):
             if not props_list:
                 continue
             id_key = NODE_UNIQUE_CONSTRAINTS.get(label)
@@ -267,7 +267,7 @@ class MemgraphIngestor:
         total_attempted = 0
         total_successful = 0
 
-        for pattern, params_list in rels_by_pattern.items():
+        for pattern, params_list in sorted(rels_by_pattern.items()):
             from_label, from_key, rel_type, to_label, to_key = pattern
             has_props = any(p[KEY_PROPS] for p in params_list)
             query = build_merge_relationship_query(

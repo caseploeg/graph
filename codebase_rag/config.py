@@ -153,6 +153,11 @@ class AppConfig(BaseSettings):
     CACHE_EVICTION_DIVISOR: int = 10
     CACHE_MEMORY_THRESHOLD_RATIO: float = 0.8
 
+    # Parallel file parsing threads (tree-sitter releases GIL)
+    FILE_PARSE_THREADS: int = 4
+    # Parallel call resolution threads
+    CALL_RESOLUTION_THREADS: int = 2
+
     OLLAMA_HEALTH_TIMEOUT: float = 5.0
 
     _active_orchestrator: ModelConfig | None = None

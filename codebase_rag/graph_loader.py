@@ -135,9 +135,9 @@ class GraphLoader:
 
     def summary(self) -> GraphSummary:
         node_labels = {
-            label: len(nodes) for label, nodes in self._nodes_by_label.items()
+            label: len(nodes) for label, nodes in sorted(self._nodes_by_label.items())
         }
-        relationship_types = dict(Counter(rel.type for rel in self.relationships))
+        relationship_types = dict(sorted(Counter(rel.type for rel in self.relationships).items()))
 
         return GraphSummary(
             total_nodes=len(self.nodes),

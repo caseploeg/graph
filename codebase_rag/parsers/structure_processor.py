@@ -36,18 +36,34 @@ class StructureProcessor:
             return (cs.NodeLabel.PACKAGE, cs.KEY_QUALIFIED_NAME, parent_container_qn)
         return (cs.NodeLabel.FOLDER, cs.KEY_PATH, str(parent_rel_path))
 
-    def identify_structure(self) -> None:
-        directories = {self.repo_path}
-        for path in self.repo_path.rglob(cs.GLOB_ALL):
-            if path.is_dir() and not should_skip_path(
-                path,
-                self.repo_path,
-                exclude_paths=self.exclude_paths,
-                include_paths=self.include_paths,
-            ):
-                directories.add(path)
+    def identify_structure(
+        self, directories: list[Path] | None = None
+    ) -> None:
+        """
+        Identify package and folder structure in the repository.
 
-        for root in sorted(directories):
+        Args:
+            directories: Optional pre-enumerated list of directories.
+                        If provided, skips filesystem traversal (optimization).
+                        If None, performs rglob to find directories.
+        """
+        if directories is not None:
+            # Use pre-enumerated directories (from FileEnumerator)
+            dirs_to_process = directories
+        else:
+            # Fall back to rglob (backwards compatibility)
+            dirs_set = {self.repo_path}
+            for path in self.repo_path.rglob(cs.GLOB_ALL):
+                if path.is_dir() and not should_skip_path(
+                    path,
+                    self.repo_path,
+                    exclude_paths=self.exclude_paths,
+                    include_paths=self.include_paths,
+                ):
+                    dirs_set.add(path)
+            dirs_to_process = sorted(dirs_set)
+
+        for root in dirs_to_process:
             relative_root = root.relative_to(self.repo_path)
 
             parent_rel_path = relative_root.parent
