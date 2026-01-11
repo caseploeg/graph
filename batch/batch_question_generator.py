@@ -35,6 +35,8 @@ from codebase_rag.graph_loader import GraphLoader
 from generate_diverse_questions import (
     DEFAULT_PROMPT_TIMEOUT,
     DiversePromptRecord,
+    MAX_REPEATS_PER_COMBO,
+    STRATEGY_WEIGHTS,
     generate_diverse_prompts,
 )
 from question_debug_stats import QuestionDebugStats
@@ -98,15 +100,18 @@ def compute_max_questions(
     Compute max questions for a repo based on candidate count.
 
     Heuristic:
-    - Each question uses a unique seed node
-    - Max questions = number of candidate seeds
-    - Target is capped by available seeds
+    - Each (seed, strategy) combo can be used up to MAX_REPEATS_PER_COMBO times
+    - Theoretical max = candidates × strategies × repeats
+    - Target is capped by theoretical max
     - Minimum threshold to avoid tiny outputs
     """
     if num_candidates < min_questions:
         return 0  # Skip repos that are too small
 
-    return min(target_per_repo, num_candidates)
+    # With combo repeats: candidates × strategies × max_repeats
+    num_strategies = len(STRATEGY_WEIGHTS)
+    theoretical_max = num_candidates * num_strategies * MAX_REPEATS_PER_COMBO
+    return min(target_per_repo, theoretical_max)
 
 
 def get_repo_path_for_graph(graph_path: Path, clones_dir: Path) -> Path | None:
