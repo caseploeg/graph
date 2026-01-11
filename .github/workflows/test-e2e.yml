@@ -16,6 +16,60 @@ on:
   workflow_dispatch:
 
 jobs:
+  # Guard against accidental baseline changes
+  check-baselines:
+    name: Check Baseline Changes
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check for baseline modifications
+        run: |
+          # Get list of changed files in PR
+          CHANGED_FILES=$(git diff --name-only origin/${{ github.base_ref }}...HEAD)
+
+          # Check if any baseline files were modified
+          BASELINE_CHANGES=$(echo "$CHANGED_FILES" | grep "^tests/e2e/baselines/" || true)
+
+          if [ -n "$BASELINE_CHANGES" ]; then
+            echo "::error::E2E baseline files were modified!"
+            echo ""
+            echo "Modified baselines:"
+            echo "$BASELINE_CHANGES"
+            echo ""
+            echo "Baselines should only be updated intentionally after graph generation changes."
+            echo ""
+            echo "If this change is intentional:"
+            echo "  1. Add 'update-baselines' label to this PR, OR"
+            echo "  2. Include '[update-baselines]' in a commit message"
+            echo ""
+            echo "To regenerate baselines:"
+            echo "  uv run python tests/e2e/regenerate_baselines.py"
+
+            # Check for override label or commit message
+            if [[ "${{ contains(github.event.pull_request.labels.*.name, 'update-baselines') }}" == "true" ]]; then
+              echo ""
+              echo "✓ 'update-baselines' label found - allowing baseline changes"
+              exit 0
+            fi
+
+            # Check commit messages for override
+            if git log origin/${{ github.base_ref }}...HEAD --oneline | grep -q "\[update-baselines\]"; then
+              echo ""
+              echo "✓ '[update-baselines]' found in commit message - allowing baseline changes"
+              exit 0
+            fi
+
+            exit 1
+          fi
+
+          echo "✓ No baseline changes detected"
+
   e2e:
     name: E2E Regression Tests
     runs-on: ubuntu-latest

@@ -5,12 +5,15 @@ Regenerate baseline JSON files for e2e tests.
 This script clones test repositories, processes them with the current
 graph generation implementation, and saves the outputs as baseline files.
 
-Usage:
-    uv run python tests/e2e/regenerate_baselines.py
+WARNING: Baseline changes require explicit approval in CI!
+         Use --force to skip confirmation prompt.
 
-After running, commit the updated baseline files:
+Usage:
+    uv run python tests/e2e/regenerate_baselines.py [--force]
+
+After running, commit with the required marker:
     git add tests/e2e/baselines/
-    git commit -m "Update e2e baselines"
+    git commit -m "[update-baselines] Regenerate e2e baselines after <reason>"
 """
 from __future__ import annotations
 
@@ -75,10 +78,25 @@ def process_repo(repo_path: Path, output_dir: Path) -> Path:
 
 def main() -> int:
     """Main entry point."""
+    force = "--force" in sys.argv or "-f" in sys.argv
+
     print("=" * 60)
     print("Regenerating E2E Test Baselines")
     print("=" * 60)
     print()
+
+    if not force:
+        print("WARNING: This will regenerate baseline files!")
+        print()
+        print("Baseline changes require explicit CI approval via:")
+        print("  - PR label: 'update-baselines'")
+        print("  - Commit message containing: '[update-baselines]'")
+        print()
+        response = input("Continue? [y/N] ").strip().lower()
+        if response != "y":
+            print("Aborted.")
+            return 1
+        print()
 
     # Ensure baselines directory exists
     BASELINES_DIR.mkdir(parents=True, exist_ok=True)
@@ -145,9 +163,11 @@ def main() -> int:
     if successes:
         print("Next steps:")
         print("  1. Review the generated baseline files in tests/e2e/baselines/")
-        print("  2. Commit the updated baselines:")
+        print("  2. Commit with the required marker for CI approval:")
         print("     git add tests/e2e/baselines/")
-        print("     git commit -m 'Update e2e baselines'")
+        print("     git commit -m '[update-baselines] Regenerate after <describe change>'")
+        print()
+        print("  Or add 'update-baselines' label to your PR.")
     print()
 
     return 1 if failures else 0
