@@ -43,7 +43,7 @@ from question_generator import get_all_candidate_seeds, get_sparse_candidate_see
 
 def count_candidate_seeds(
     graph_path: Path,
-    min_connections: int = 2,
+    min_connections: int = 1,
     debug: bool = False,
     sparse_mode: bool = False,
 ) -> int | tuple[int, QuestionDebugStats | None]:
