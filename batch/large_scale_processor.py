@@ -266,31 +266,77 @@ class LargeScaleBatchProcessor:
     def questions_phase(self) -> list[dict]:
         """Generate questions for all processed repos in parallel."""
         from batch.batch_question_generator import batch_generate_questions
+        from batch.questions_rich_ui import QuestionsLogExporter, QuestionsProgressUI
 
         questions_dir = self.config.questions_dir or (self.config.output_dir.parent / "questions")
+        questions_dir.mkdir(parents=True, exist_ok=True)
 
-        print()
-        print("=" * 60)
-        print("QUESTION GENERATION")
-        print("=" * 60)
+        graph_files = [
+            f for f in self.config.output_dir.glob("*.json")
+            if f.name != "_batch_summary.json"
+        ]
+        total_repos = len(graph_files)
 
-        results = batch_generate_questions(
-            graphs_dir=self.config.output_dir,
-            clones_dir=self.config.clone_dir,
-            questions_dir=questions_dir,
-            target_per_repo=self.config.target_questions_per_repo,
-            min_questions=self.config.min_questions,
-            workers=self.config.question_workers,
-            debug=self.config.questions_debug,
-            sparse_fallback=self.config.sparse_fallback,
-            verbose=self.config.questions_verbose,
-        )
+        log_exporter = QuestionsLogExporter(questions_dir)
+
+        config_dict = {
+            "target_per_repo": self.config.target_questions_per_repo,
+            "min_questions": self.config.min_questions,
+            "workers": self.config.question_workers or "auto",
+            "sparse_fallback": self.config.sparse_fallback,
+            "debug": self.config.questions_debug,
+        }
+
+        if self.config.questions_verbose:
+            print()
+            print("=" * 60)
+            print("QUESTION GENERATION (verbose mode)")
+            print("=" * 60)
+
+            log_exporter.start(config_dict)
+            results = batch_generate_questions(
+                graphs_dir=self.config.output_dir,
+                clones_dir=self.config.clone_dir,
+                questions_dir=questions_dir,
+                target_per_repo=self.config.target_questions_per_repo,
+                min_questions=self.config.min_questions,
+                workers=self.config.question_workers,
+                debug=self.config.questions_debug,
+                sparse_fallback=self.config.sparse_fallback,
+                verbose=True,
+                ui=None,
+            )
+            log_exporter.close()
+        else:
+            questions_ui = QuestionsProgressUI(
+                total_repos=total_repos,
+                log_exporter=log_exporter,
+            )
+            questions_ui.start(config=config_dict)
+
+            with questions_ui.live_context():
+                results = batch_generate_questions(
+                    graphs_dir=self.config.output_dir,
+                    clones_dir=self.config.clone_dir,
+                    questions_dir=questions_dir,
+                    target_per_repo=self.config.target_questions_per_repo,
+                    min_questions=self.config.min_questions,
+                    workers=self.config.question_workers,
+                    debug=self.config.questions_debug,
+                    sparse_fallback=self.config.sparse_fallback,
+                    verbose=False,
+                    ui=questions_ui,
+                )
+                questions_ui.finish()
+
+            log_exporter.finish(questions_ui.stats)
+            log_exporter.close()
+            questions_ui.print_summary()
 
         return results
 
     def run_questions_only(self) -> None:
         """Run question generation only on existing graphs."""
-        # Validate directories exist
         if not self.config.output_dir.exists():
             print(f"Error: Output directory not found: {self.config.output_dir}")
             sys.exit(1)
@@ -298,12 +344,13 @@ class LargeScaleBatchProcessor:
             print(f"Error: Clone directory not found: {self.config.clone_dir}")
             sys.exit(1)
 
-        print("=" * 60)
-        print("QUESTIONS-ONLY MODE")
-        print("=" * 60)
-        print(f"Graphs dir:   {self.config.output_dir}")
-        print(f"Clones dir:   {self.config.clone_dir}")
-        print(f"Workers:      {self.config.question_workers or 'auto'}")
+        if self.config.questions_verbose:
+            print("=" * 60)
+            print("QUESTIONS-ONLY MODE (verbose)")
+            print("=" * 60)
+            print(f"Graphs dir:   {self.config.output_dir}")
+            print(f"Clones dir:   {self.config.clone_dir}")
+            print(f"Workers:      {self.config.question_workers or 'auto'}")
 
         self.questions_phase()
 

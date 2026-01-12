@@ -43,10 +43,15 @@ import json
 import random
 import signal
 import sys
+import time
 from collections import Counter
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from batch.questions_rich_ui import GenerationStats
 
 BATCH_DIR = Path(__file__).parent
 PROJECT_ROOT = BATCH_DIR.parent
@@ -186,7 +191,7 @@ def generate_diverse_prompts(
     quiet: bool = False,
     prompt_timeout: int = DEFAULT_PROMPT_TIMEOUT,
     max_attempts: int | None = None,
-) -> list[DiversePromptRecord]:
+) -> tuple[list[DiversePromptRecord], GenerationStats]:
     """Generate prompts with strategy rotation for diversity.
 
     Args:
@@ -201,8 +206,12 @@ def generate_diverse_prompts(
         prompt_timeout: Timeout in seconds per prompt generation (default: 30)
         max_attempts: Maximum total attempts before giving up (default: 5x num_prompts)
 
-    Returns list of DiversePromptRecord objects with rich metadata.
+    Returns tuple of (prompts, generation_stats) where prompts is list of
+    DiversePromptRecord objects and generation_stats contains aggregate metrics.
     """
+    from batch.questions_rich_ui import GenerationStats
+
+    start_time = time.time()
     if max_attempts is None:
         max_attempts = num_prompts * DEFAULT_MAX_ATTEMPTS_MULTIPLIER
     if random_seed is not None:
@@ -360,6 +369,10 @@ def generate_diverse_prompts(
     if attempt_count >= max_attempts and len(prompts) < num_prompts and not quiet:
         print(f"\nReached max attempts ({max_attempts}), stopping with {len(prompts)} prompts", file=sys.stderr)
 
+    unique_seeds = len(set(combo[0] for combo in combo_counts.keys()))
+    unique_combos = len(combo_counts)
+    duration_seconds = time.time() - start_time
+
     if not quiet:
         print(file=sys.stderr)
         print("=" * 60, file=sys.stderr)
@@ -367,8 +380,6 @@ def generate_diverse_prompts(
         print("=" * 60, file=sys.stderr)
         print(f"Total prompts: {len(prompts)}", file=sys.stderr)
         print(f"Total attempts: {attempt_count}", file=sys.stderr)
-        unique_seeds = len(set(combo[0] for combo in combo_counts.keys()))
-        unique_combos = len(combo_counts)
         total_combo_uses = sum(combo_counts.values())
         avg_repeats = total_combo_uses / unique_combos if unique_combos > 0 else 0
         print(f"Unique seeds used: {unique_seeds}", file=sys.stderr)
@@ -385,7 +396,16 @@ def generate_diverse_prompts(
             print(f"  {strategy:10s}: {count:4d} ({pct:5.1f}%)", file=sys.stderr)
         print(file=sys.stderr)
 
-    return prompts
+    gen_stats = GenerationStats(
+        timeout_count=timeout_count,
+        strategy_counts=dict(strategy_counts),
+        attempt_count=attempt_count,
+        unique_seeds_used=unique_seeds,
+        unique_combos_used=unique_combos,
+        duration_seconds=duration_seconds,
+    )
+
+    return prompts, gen_stats
 
 
 def write_prompts_to_jsonl(prompts: list[DiversePromptRecord], output_path: Path) -> None:
@@ -470,7 +490,7 @@ def main() -> None:
             )
             weights = None
 
-    prompts = generate_diverse_prompts(
+    prompts, gen_stats = generate_diverse_prompts(
         graph_path=args.graph,
         repo_path=args.repo,
         num_prompts=args.num_prompts,
@@ -484,7 +504,6 @@ def main() -> None:
     if args.output:
         write_prompts_to_jsonl(prompts, args.output)
     else:
-        # Print JSONL to stdout
         for record in prompts:
             print(json.dumps(asdict(record), ensure_ascii=False))
 
