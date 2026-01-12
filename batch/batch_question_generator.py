@@ -33,6 +33,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from codebase_rag.graph_loader import GraphLoader
 
 from generate_diverse_questions import (
+    DEFAULT_MAX_ATTEMPTS_MULTIPLIER,
     DEFAULT_PROMPT_TIMEOUT,
     DiversePromptRecord,
     generate_diverse_prompts,
@@ -148,6 +149,7 @@ def generate_questions_for_repo(
     prompt_timeout: int = DEFAULT_PROMPT_TIMEOUT,
     debug: bool = False,
     sparse_fallback: bool = True,
+    max_attempts: int | None = None,
 ) -> dict:
     """
     Generate questions for a single repo.
@@ -163,6 +165,7 @@ def generate_questions_for_repo(
         prompt_timeout: Timeout in seconds per prompt generation
         debug: Show detailed debug statistics
         sparse_fallback: Try sparse mode if regular mode has too few candidates
+        max_attempts: Maximum attempts before giving up (default: 5x target)
 
     Returns summary dict with stats.
     """
@@ -226,6 +229,7 @@ def generate_questions_for_repo(
             random_seed=random_seed,
             quiet=quiet,
             prompt_timeout=prompt_timeout,
+            max_attempts=max_attempts,
         )
 
         # Write to JSONL
@@ -265,7 +269,7 @@ def generate_questions_worker(args: tuple) -> dict:
     logger.add(lambda msg: None, level="ERROR")
     logging.getLogger().setLevel(logging.ERROR)
 
-    graph_path, repo_path, output_path, target_questions, min_questions, prompt_timeout, sparse_fallback = args
+    graph_path, repo_path, output_path, target_questions, min_questions, prompt_timeout, sparse_fallback, max_attempts = args
     return generate_questions_for_repo(
         graph_path=graph_path,
         repo_path=repo_path,
@@ -275,6 +279,7 @@ def generate_questions_worker(args: tuple) -> dict:
         quiet=True,  # Suppress output in worker processes
         prompt_timeout=prompt_timeout,
         sparse_fallback=sparse_fallback,
+        max_attempts=max_attempts,
     )
 
 
@@ -300,6 +305,7 @@ def batch_generate_questions(
     debug: bool = False,
     sparse_fallback: bool = True,
     verbose: bool = False,
+    max_attempts: int | None = None,
 ) -> list[dict]:
     """
     Generate questions for all graphs in a directory using parallel processing.
@@ -317,6 +323,7 @@ def batch_generate_questions(
         debug: Show detailed debug statistics per repo
         sparse_fallback: Try sparse mode if regular mode has too few candidates
         verbose: Run sequentially with full output (disables parallel processing)
+        max_attempts: Maximum attempts per repo before giving up (default: 5x target)
 
     Returns:
         List of result dicts with stats per repo
@@ -335,9 +342,11 @@ def batch_generate_questions(
     else:
         workers = workers or get_optimal_workers()
 
+    effective_max_attempts = max_attempts if max_attempts else f"{target_per_repo * DEFAULT_MAX_ATTEMPTS_MULTIPLIER} (5x target)"
     print(f"Found {len(graph_files)} graphs to process")
     print(f"Target questions per repo: {target_per_repo}")
     print(f"Minimum candidates required: {min_questions}")
+    print(f"Max attempts per repo: {effective_max_attempts}")
     print(f"Sparse fallback: {sparse_fallback}")
     print(f"Debug mode: {debug}")
     print(f"Verbose mode: {verbose}")
@@ -365,7 +374,7 @@ def batch_generate_questions(
             continue
 
         output_path = questions_dir / f"{repo_name}_questions.jsonl"
-        args_list.append((graph_path, repo_path, output_path, target_per_repo, min_questions, prompt_timeout, sparse_fallback))
+        args_list.append((graph_path, repo_path, output_path, target_per_repo, min_questions, prompt_timeout, sparse_fallback, max_attempts))
 
     print(f"Processing {len(args_list)} repos ({len(skipped_results)} skipped - repo not found)")
 
@@ -377,7 +386,7 @@ def batch_generate_questions(
     if verbose:
         # Sequential processing with full output
         for args in args_list:
-            graph_path, repo_path, output_path, target_q, min_q, timeout, sparse_fb = args
+            graph_path, repo_path, output_path, target_q, min_q, timeout, sparse_fb, max_att = args
             repo_name = graph_path.stem
             completed += 1
 
@@ -396,6 +405,7 @@ def batch_generate_questions(
                     prompt_timeout=timeout,
                     debug=debug,
                     sparse_fallback=sparse_fb,
+                    max_attempts=max_att,
                 )
             except Exception as e:
                 result = {
@@ -562,6 +572,12 @@ def main() -> None:
         action="store_true",
         help="Run sequentially with full output (disables parallel processing)",
     )
+    parser.add_argument(
+        "--max-attempts",
+        type=int,
+        default=None,
+        help=f"Max attempts per repo before giving up (default: {DEFAULT_MAX_ATTEMPTS_MULTIPLIER}x target)",
+    )
 
     args = parser.parse_args()
 
@@ -585,6 +601,7 @@ def main() -> None:
         debug=args.debug,
         sparse_fallback=not args.no_sparse_fallback,
         verbose=args.verbose,
+        max_attempts=args.max_attempts,
     )
 
 

@@ -172,6 +172,9 @@ def expand_with_strategy(
         return expand_context(graph, seed_id, max_hops=2, max_nodes=max_nodes)
 
 
+DEFAULT_MAX_ATTEMPTS_MULTIPLIER = 5
+
+
 def generate_diverse_prompts(
     graph_path: Path,
     repo_path: Path,
@@ -182,6 +185,7 @@ def generate_diverse_prompts(
     random_seed: int | None = None,
     quiet: bool = False,
     prompt_timeout: int = DEFAULT_PROMPT_TIMEOUT,
+    max_attempts: int | None = None,
 ) -> list[DiversePromptRecord]:
     """Generate prompts with strategy rotation for diversity.
 
@@ -195,9 +199,12 @@ def generate_diverse_prompts(
         random_seed: Optional random seed for reproducibility
         quiet: Suppress verbose output (for parallel workers)
         prompt_timeout: Timeout in seconds per prompt generation (default: 30)
+        max_attempts: Maximum total attempts before giving up (default: 5x num_prompts)
 
     Returns list of DiversePromptRecord objects with rich metadata.
     """
+    if max_attempts is None:
+        max_attempts = num_prompts * DEFAULT_MAX_ATTEMPTS_MULTIPLIER
     if random_seed is not None:
         random.seed(random_seed)
         if not quiet:
@@ -253,6 +260,7 @@ def generate_diverse_prompts(
     strategy_idx = 0
     strategy_counts: Counter[str] = Counter()
     timeout_count = 0
+    attempt_count = 0
     unique_strategies = set(weights.keys())
     max_total_combos = len(candidate_dict) * len(unique_strategies) * MAX_REPEATS_PER_COMBO
 
@@ -262,9 +270,12 @@ def generate_diverse_prompts(
         print("GENERATING PROMPTS", file=sys.stderr)
         print(f"Max repeats per combo: {MAX_REPEATS_PER_COMBO}", file=sys.stderr)
         print(f"Max theoretical capacity: {max_total_combos:,}", file=sys.stderr)
+        print(f"Max attempts: {max_attempts:,}", file=sys.stderr)
         print("=" * 60, file=sys.stderr)
 
-    while len(prompts) < num_prompts:
+    while len(prompts) < num_prompts and attempt_count < max_attempts:
+        attempt_count += 1
+
         if not strategy_queue:
             strategy_queue = build_strategy_queue(weights)
 
@@ -346,12 +357,16 @@ def generate_diverse_prompts(
         prompts.append(record)
         strategy_counts[strategy] += 1
 
+    if attempt_count >= max_attempts and len(prompts) < num_prompts and not quiet:
+        print(f"\nReached max attempts ({max_attempts}), stopping with {len(prompts)} prompts", file=sys.stderr)
+
     if not quiet:
         print(file=sys.stderr)
         print("=" * 60, file=sys.stderr)
         print("GENERATION COMPLETE", file=sys.stderr)
         print("=" * 60, file=sys.stderr)
         print(f"Total prompts: {len(prompts)}", file=sys.stderr)
+        print(f"Total attempts: {attempt_count}", file=sys.stderr)
         unique_seeds = len(set(combo[0] for combo in combo_counts.keys()))
         unique_combos = len(combo_counts)
         total_combo_uses = sum(combo_counts.values())
