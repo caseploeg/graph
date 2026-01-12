@@ -460,6 +460,19 @@ def batch_generate_questions(
         avg = total_generated / len(successful)
         print(f"Avg per repo:     {avg:,.0f}")
 
+    # Combine all questions into a single file
+    all_questions_path = questions_dir / "all_questions.jsonl"
+    combined_count = 0
+    with open(all_questions_path, "w") as out_f:
+        for result in successful:
+            output_file = result.get("output")
+            if output_file and Path(output_file).exists():
+                with open(output_file) as in_f:
+                    for line in in_f:
+                        out_f.write(line)
+                        combined_count += 1
+    print(f"\nCombined file:    {all_questions_path} ({combined_count:,} questions)")
+
     # Write summary
     summary_path = questions_dir / "_questions_summary.json"
     summary = {
@@ -468,6 +481,8 @@ def batch_generate_questions(
         "sparse_mode_used": len(sparse_used),
         "skipped": len(skipped),
         "total_questions": total_generated,
+        "combined_file": str(all_questions_path),
+        "combined_count": combined_count,
         "target_per_repo": target_per_repo,
         "sparse_fallback": sparse_fallback,
         "workers": workers,
