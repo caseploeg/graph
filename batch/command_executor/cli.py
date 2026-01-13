@@ -18,21 +18,40 @@ def cli() -> None:
     pass
 
 
+DANGEROUS_FLAG = "--i-understand-awk-sed-can-execute-arbitrary-code"
+
+
 @cli.command()
 @click.argument("commands_file", type=click.Path(exists=True, path_type=Path))
 @click.option("--output", "-o", type=click.Path(path_type=Path), required=True)
 @click.option("--cache-db", type=click.Path(path_type=Path), default=Path("cache.sqlite"))
 @click.option("--concurrency", "-c", type=int, default=100)
 @click.option("--timeout", "-t", type=int, default=30)
+@click.option(
+    DANGEROUS_FLAG,
+    "allow_dangerous",
+    is_flag=True,
+    default=False,
+    hidden=True,
+    help="Allow awk/sed in pipes. DANGEROUS: they can execute arbitrary commands!",
+)
 def run(
     commands_file: Path,
     output: Path,
     cache_db: Path,
     concurrency: int,
     timeout: int,
+    allow_dangerous: bool,
 ) -> None:
+    if allow_dangerous:
+        click.echo("=" * 60, err=True)
+        click.echo("WARNING: Dangerous mode enabled!", err=True)
+        click.echo("awk and sed can execute arbitrary commands via system()", err=True)
+        click.echo("Only use this if you trust ALL commands in the input file!", err=True)
+        click.echo("=" * 60, err=True)
+
     cache = CommandCache(cache_db)
-    runner = SafeCommandRunner(timeout=timeout)
+    runner = SafeCommandRunner(timeout=timeout, allow_dangerous=allow_dangerous)
     executor = AsyncBatchExecutor(cache, runner, concurrency=concurrency)
 
     def load_commands():

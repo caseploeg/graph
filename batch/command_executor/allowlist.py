@@ -43,6 +43,9 @@ SAFE_PIPE_SINKS = frozenset({
     "uniq",
     "grep",
     "cut",
+})
+
+DANGEROUS_PIPE_SINKS = frozenset({
     "awk",
     "sed",
 })
@@ -144,7 +147,9 @@ def _split_pipeline(command: str) -> list[str]:
     return [s for s in segments if s]
 
 
-def _validate_segment(segment: str, is_first: bool) -> str | None:
+def _validate_segment(
+    segment: str, is_first: bool, allow_dangerous: bool = False
+) -> str | None:
     try:
         parts = shlex.split(segment)
     except ValueError as e:
@@ -159,8 +164,11 @@ def _validate_segment(segment: str, is_first: bool) -> str | None:
         if base_cmd not in READONLY_ALLOWLIST:
             return ValidationError.NOT_IN_ALLOWLIST.format(cmd=base_cmd)
     else:
-        if base_cmd not in SAFE_PIPE_SINKS:
-            allowed = ", ".join(sorted(SAFE_PIPE_SINKS))
+        allowed_sinks = SAFE_PIPE_SINKS
+        if allow_dangerous:
+            allowed_sinks = SAFE_PIPE_SINKS | DANGEROUS_PIPE_SINKS
+        if base_cmd not in allowed_sinks:
+            allowed = ", ".join(sorted(allowed_sinks))
             return ValidationError.PIPE_SINK_NOT_ALLOWED.format(
                 cmd=base_cmd, allowed=allowed
             )
@@ -180,7 +188,9 @@ def _validate_segment(segment: str, is_first: bool) -> str | None:
     return None
 
 
-def validate_command(command: str) -> ValidationResult:
+def validate_command(
+    command: str, allow_dangerous: bool = False
+) -> ValidationResult:
     if not command or not command.strip():
         return ValidationResult(valid=False, error="Empty command")
 
@@ -195,7 +205,7 @@ def validate_command(command: str) -> ValidationResult:
 
     for i, segment in enumerate(segments):
         is_first = i == 0
-        if error := _validate_segment(segment, is_first):
+        if error := _validate_segment(segment, is_first, allow_dangerous):
             return ValidationResult(valid=False, error=error)
 
     return ValidationResult(valid=True)

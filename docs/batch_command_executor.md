@@ -42,7 +42,17 @@ uv run python -m batch.command_executor.cli inspect results.jsonl --status faile
 `status`, `log`, `diff`, `show`, `branch`, `tag`, `ls-files`, `ls-tree`, `rev-parse`, `describe`, `rev-list`, `cat-file`, `name-rev`, `shortlog`, `blame`
 
 ### Safe Pipe Sinks (allowed after `|`)
-`head`, `tail`, `wc`, `less`, `sort`, `uniq`, `grep`, `cut`, `awk`, `sed`
+`head`, `tail`, `wc`, `less`, `sort`, `uniq`, `grep`, `cut`
+
+### Dangerous Sinks (blocked by default)
+`awk`, `sed` - These can execute arbitrary commands via `system()` or write files.
+
+To enable (NOT recommended unless you trust all input):
+```bash
+uv run python -m batch.command_executor.cli run commands.jsonl \
+    --i-understand-awk-sed-can-execute-arbitrary-code \
+    --output results.jsonl
+```
 
 ### Always Blocked
 - Redirects: `>`, `>>`, `<`

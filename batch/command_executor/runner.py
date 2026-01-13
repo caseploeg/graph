@@ -10,8 +10,9 @@ from .schemas import CommandResult
 
 
 class SafeCommandRunner:
-    def __init__(self, timeout: int = 30):
+    def __init__(self, timeout: int = 30, allow_dangerous: bool = False):
         self.timeout = timeout
+        self.allow_dangerous = allow_dangerous
 
     async def _execute_pipeline(
         self, segments: list[str], cwd: Path
@@ -91,7 +92,7 @@ class SafeCommandRunner:
     async def execute(self, cmd: str, cwd: Path) -> CommandResult:
         start_time = time.perf_counter()
 
-        validation = validate_command(cmd)
+        validation = validate_command(cmd, allow_dangerous=self.allow_dangerous)
         if not validation.valid:
             duration_ms = (time.perf_counter() - start_time) * 1000
             return CommandResult(
