@@ -7,10 +7,19 @@ from pathlib import Path
 import click
 
 from .cache import CommandCache
+from .dashboard import Dashboard
 from .executor_async import AsyncBatchExecutor
 from .inspector import ResultsInspector, format_result, format_summary
 from .runner import SafeCommandRunner
 from .schemas import CommandInput, CommandResult
+
+
+def count_lines(path: Path) -> int:
+    count = 0
+    with open(path, "rb") as f:
+        for _ in f:
+            count += 1
+    return count
 
 
 @click.group()
@@ -27,6 +36,7 @@ DANGEROUS_FLAG = "--i-understand-awk-sed-can-execute-arbitrary-code"
 @click.option("--cache-db", type=click.Path(path_type=Path), default=Path("cache.sqlite"))
 @click.option("--concurrency", "-c", type=int, default=100)
 @click.option("--timeout", "-t", type=int, default=30)
+@click.option("--no-dashboard", is_flag=True, default=False, help="Disable live dashboard")
 @click.option(
     DANGEROUS_FLAG,
     "allow_dangerous",
@@ -41,6 +51,7 @@ def run(
     cache_db: Path,
     concurrency: int,
     timeout: int,
+    no_dashboard: bool,
     allow_dangerous: bool,
 ) -> None:
     if allow_dangerous:
@@ -49,6 +60,10 @@ def run(
         click.echo("awk and sed can execute arbitrary commands via system()", err=True)
         click.echo("Only use this if you trust ALL commands in the input file!", err=True)
         click.echo("=" * 60, err=True)
+
+    click.echo("Counting commands...", err=True)
+    total_commands = count_lines(commands_file)
+    click.echo(f"Found {total_commands:,} commands", err=True)
 
     cache = CommandCache(cache_db)
     runner = SafeCommandRunner(timeout=timeout, allow_dangerous=allow_dangerous)
@@ -62,40 +77,47 @@ def run(
                     yield CommandInput.from_json(line)
 
     output_handle = open(output, "w")
+    dashboard: Dashboard | None = None
+
+    if not no_dashboard:
+        dashboard = Dashboard(
+            total_commands=total_commands,
+            output_path=output,
+            cache_path=cache_db,
+        )
+
     results_written = 0
 
     def on_result(result: CommandResult) -> None:
         nonlocal results_written
         output_handle.write(result.to_json() + "\n")
-        output_handle.flush()
         results_written += 1
-        if results_written % 100 == 0:
-            click.echo(f"Processed {results_written} commands...", err=True)
+        if results_written % 50 == 0:
+            output_handle.flush()
 
-    click.echo(f"Running commands from {commands_file}", err=True)
-    click.echo(f"Cache: {cache_db}", err=True)
-    click.echo(f"Concurrency: {concurrency}", err=True)
-    click.echo("-" * 60, err=True)
+        if dashboard:
+            dashboard.update(
+                success=(result.return_code == 0),
+                cached=result.cached,
+            )
+        elif results_written % 1000 == 0:
+            click.echo(f"Processed {results_written:,} commands...", err=True)
 
     try:
-        batch_result = asyncio.run(executor.run(load_commands(), on_result))
+        if dashboard:
+            dashboard.start()
+        asyncio.run(executor.run(load_commands(), on_result))
     finally:
+        output_handle.flush()
         output_handle.close()
         cache.close()
-
-    click.echo("-" * 60, err=True)
-    click.echo(f"Total commands:  {batch_result.total_commands:,}", err=True)
-    click.echo(f"Executed:        {batch_result.executed:,}", err=True)
-    click.echo(f"Cached:          {batch_result.cached:,}", err=True)
-    click.echo(f"Failed:          {batch_result.failed:,}", err=True)
-    click.echo(f"Total time:      {batch_result.total_duration_s:.2f}s", err=True)
-    click.echo(f"Avg exec time:   {batch_result.avg_execution_ms:.2f}ms", err=True)
-
-    if batch_result.total_duration_s > 0:
-        rate = batch_result.total_commands / batch_result.total_duration_s
-        click.echo(f"Commands/sec:    {rate:.1f}", err=True)
-
-    click.echo(f"\nResults written to: {output}", err=True)
+        if dashboard:
+            dashboard.stop()
+            dashboard.print_final_summary()
+        else:
+            click.echo("-" * 60, err=True)
+            click.echo(f"Total commands:  {results_written:,}", err=True)
+            click.echo(f"\nResults written to: {output}", err=True)
 
 
 @cli.command()
