@@ -21,25 +21,29 @@ import argparse
 import json
 import os
 import sys
-from concurrent.futures import ProcessPoolExecutor, TimeoutError as FuturesTimeoutError, as_completed
+from collections.abc import Callable
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import TimeoutError as FuturesTimeoutError
 from dataclasses import asdict
 from pathlib import Path
-from typing import Callable
+from typing import TYPE_CHECKING
 
 BATCH_DIR = Path(__file__).parent
 PROJECT_ROOT = BATCH_DIR.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from codebase_rag.graph_loader import GraphLoader
-
 from generate_diverse_questions import (
     DEFAULT_MAX_ATTEMPTS_MULTIPLIER,
     DEFAULT_PROMPT_TIMEOUT,
-    DiversePromptRecord,
     generate_diverse_prompts,
 )
 from question_debug_stats import QuestionDebugStats
 from question_generator import get_all_candidate_seeds, get_sparse_candidate_seeds
+
+from codebase_rag.graph_loader import GraphLoader
+
+if TYPE_CHECKING:
+    from batch.questions_rich_ui import QuestionsProgressUI
 
 
 def count_candidate_seeds(
@@ -221,7 +225,7 @@ def generate_questions_for_repo(
         print(f"  Candidates: {num_candidates}, generating up to {max_questions} questions")
 
     try:
-        prompts = generate_diverse_prompts(
+        prompts, gen_stats = generate_diverse_prompts(
             graph_path=graph_path,
             repo_path=repo_path,
             num_prompts=max_questions,
@@ -232,7 +236,6 @@ def generate_questions_for_repo(
             max_attempts=max_attempts,
         )
 
-        # Write to JSONL
         output_path.parent.mkdir(parents=True, exist_ok=True)
         with open(output_path, "w") as f:
             for record in prompts:
@@ -246,6 +249,7 @@ def generate_questions_for_repo(
             "generated": len(prompts),
             "skipped": False,
             "sparse_mode": sparse_mode_used,
+            "gen_stats": gen_stats.to_dict(),
         }
 
     except Exception as e:
@@ -264,6 +268,7 @@ def generate_questions_worker(args: tuple) -> dict:
     """Worker function for parallel question generation."""
     # Suppress logging in subprocess to avoid interleaved output
     import logging
+
     from loguru import logger
     logger.remove()
     logger.add(lambda msg: None, level="ERROR")
@@ -310,6 +315,7 @@ def batch_generate_questions(
     verbose: bool = False,
     max_attempts: int | None = None,
     repo_timeout: int = DEFAULT_REPO_TIMEOUT,
+    ui: QuestionsProgressUI | None = None,
 ) -> list[dict]:
     """
     Generate questions for all graphs in a directory using parallel processing.
@@ -329,11 +335,13 @@ def batch_generate_questions(
         verbose: Run sequentially with full output (disables parallel processing)
         max_attempts: Maximum attempts per repo before giving up (default: 5x target)
         repo_timeout: Hard time limit per repo in seconds (default: 600)
+        ui: Optional Rich UI for progress display (None for text output)
 
     Returns:
         List of result dicts with stats per repo
     """
-    # Find all graph files (exclude summary)
+    from batch.questions_rich_ui import GenerationStats
+
     graph_files = sorted([
         f for f in graphs_dir.glob("*.json")
         if f.name != "_batch_summary.json"
@@ -343,21 +351,22 @@ def batch_generate_questions(
         graph_files = graph_files[:limit]
 
     if verbose:
-        workers = 1  # Force sequential for verbose mode
+        workers = 1
     else:
         workers = workers or get_optimal_workers()
 
-    effective_max_attempts = max_attempts if max_attempts else f"{target_per_repo * DEFAULT_MAX_ATTEMPTS_MULTIPLIER} (5x target)"
-    print(f"Found {len(graph_files)} graphs to process")
-    print(f"Target questions per repo: {target_per_repo}")
-    print(f"Minimum candidates required: {min_questions}")
-    print(f"Max attempts per repo: {effective_max_attempts}")
-    print(f"Repo timeout: {repo_timeout}s")
-    print(f"Sparse fallback: {sparse_fallback}")
-    print(f"Debug mode: {debug}")
-    print(f"Verbose mode: {verbose}")
-    print(f"Workers: {workers}")
-    print("-" * 60)
+    if not ui:
+        effective_max_attempts = max_attempts if max_attempts else f"{target_per_repo * DEFAULT_MAX_ATTEMPTS_MULTIPLIER} (5x target)"
+        print(f"Found {len(graph_files)} graphs to process")
+        print(f"Target questions per repo: {target_per_repo}")
+        print(f"Minimum candidates required: {min_questions}")
+        print(f"Max attempts per repo: {effective_max_attempts}")
+        print(f"Repo timeout: {repo_timeout}s")
+        print(f"Sparse fallback: {sparse_fallback}")
+        print(f"Debug mode: {debug}")
+        print(f"Verbose mode: {verbose}")
+        print(f"Workers: {workers}")
+        print("-" * 60)
 
     questions_dir.mkdir(parents=True, exist_ok=True)
 
@@ -382,7 +391,8 @@ def batch_generate_questions(
         output_path = questions_dir / f"{repo_name}_questions.jsonl"
         args_list.append((graph_path, repo_path, output_path, target_per_repo, min_questions, prompt_timeout, sparse_fallback, max_attempts))
 
-    print(f"Processing {len(args_list)} repos ({len(skipped_results)} skipped - repo not found)")
+    if not ui:
+        print(f"Processing {len(args_list)} repos ({len(skipped_results)} skipped - repo not found)")
 
     results: list[dict] = list(skipped_results)  # Start with skipped results
     total_generated = 0
@@ -449,9 +459,17 @@ def batch_generate_questions(
                 if on_complete:
                     on_complete(result)
         else:
-            # Parallel processing with suppressed output
             with ProcessPoolExecutor(max_workers=workers) as executor:
-                futures = {executor.submit(generate_questions_worker, args): args for args in args_list}
+                futures = {}
+                for i, args in enumerate(args_list):
+                    future = executor.submit(generate_questions_worker, args)
+                    futures[future] = args
+                    if ui and i < workers:
+                        repo_name = args[0].stem
+                        if "__" in repo_name:
+                            owner, name = repo_name.split("__", 1)
+                            repo_name = f"{owner}/{name}"
+                        ui.mark_repo_started(repo_name)
 
                 for future in as_completed(futures):
                     args = futures[future]
@@ -480,40 +498,58 @@ def batch_generate_questions(
                     results.append(result)
                     total_generated += result.get("generated", 0)
 
-                    # Append to combined file immediately after success
                     if not result.get("skipped"):
                         append_to_combined(result)
 
-                    # Progress output
-                    status = "OK" if not result.get("skipped") else "SKIP"
-                    gen_count = result.get("generated", 0)
-                    sparse_tag = " [sparse]" if result.get("sparse_mode") else ""
-                    timeout_tag = " [TIMEOUT]" if "Timeout" in result.get("reason", "") else ""
-                    print(f"[{completed}/{total_to_process}] {status}: {repo_name} ({gen_count:,} questions){sparse_tag}{timeout_tag}")
+                    gen_stats = None
+                    gen_stats_dict = result.get("gen_stats")
+                    if gen_stats_dict:
+                        gen_stats = GenerationStats.from_dict(gen_stats_dict)
+
+                    if ui:
+                        ui.update_repo_complete(result, gen_stats)
+                        completed_paths = {r.get("graph") for r in results}
+                        in_progress_names = set(ui.stats.in_progress_repos)
+                        for pending_args in args_list:
+                            if str(pending_args[0]) not in completed_paths:
+                                pending_name = pending_args[0].stem
+                                if "__" in pending_name:
+                                    owner, name = pending_name.split("__", 1)
+                                    pending_name = f"{owner}/{name}"
+                                if pending_name not in in_progress_names:
+                                    ui.mark_repo_started(pending_name)
+                                    break
+                    else:
+                        status = "OK" if not result.get("skipped") else "SKIP"
+                        gen_count = result.get("generated", 0)
+                        sparse_tag = " [sparse]" if result.get("sparse_mode") else ""
+                        timeout_tag = " [TIMEOUT]" if "Timeout" in result.get("reason", "") else ""
+                        print(f"[{completed}/{total_to_process}] {status}: {repo_name} ({gen_count:,} questions){sparse_tag}{timeout_tag}")
 
                     if on_complete:
                         on_complete(result)
     finally:
         all_questions_file.close()
 
-    print("-" * 60)
-    print("SUMMARY")
-    print("-" * 60)
     successful = [r for r in results if not r.get("skipped")]
     skipped = [r for r in results if r.get("skipped")]
     sparse_used = [r for r in successful if r.get("sparse_mode")]
-    print(f"Total repos:      {len(results)}")
-    print(f"Successful:       {len(successful)}")
-    print(f"  - Regular mode: {len(successful) - len(sparse_used)}")
-    print(f"  - Sparse mode:  {len(sparse_used)}")
-    print(f"Skipped:          {len(skipped)}")
-    print(f"Total questions:  {total_generated:,}")
-    if successful:
-        avg = total_generated / len(successful)
-        print(f"Avg per repo:     {avg:,.0f}")
-    print(f"\nCombined file:    {all_questions_path} ({combined_count:,} questions)")
 
-    # Write summary
+    if not ui:
+        print("-" * 60)
+        print("SUMMARY")
+        print("-" * 60)
+        print(f"Total repos:      {len(results)}")
+        print(f"Successful:       {len(successful)}")
+        print(f"  - Regular mode: {len(successful) - len(sparse_used)}")
+        print(f"  - Sparse mode:  {len(sparse_used)}")
+        print(f"Skipped:          {len(skipped)}")
+        print(f"Total questions:  {total_generated:,}")
+        if successful:
+            avg = total_generated / len(successful)
+            print(f"Avg per repo:     {avg:,.0f}")
+        print(f"\nCombined file:    {all_questions_path} ({combined_count:,} questions)")
+
     summary_path = questions_dir / "_questions_summary.json"
     summary = {
         "total_repos": len(results),
@@ -530,7 +566,9 @@ def batch_generate_questions(
     }
     with open(summary_path, "w") as f:
         json.dump(summary, f, indent=2)
-    print(f"\nSummary written to: {summary_path}")
+
+    if not ui:
+        print(f"\nSummary written to: {summary_path}")
 
     return results
 
