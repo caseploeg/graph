@@ -22,6 +22,7 @@ dependencies = [
     "click>=8.0.0",
     "protobuf>=5.27.0",
     "defusedxml>=0.7.1",
+    "psutil>=7.2.1",
 ]
 
 [project.scripts]
@@ -32,7 +33,7 @@ cgr = "codebase_rag.cli:app"
 package = true
 
 [tool.setuptools]
-packages = ["codebase_rag", "codec"]
+packages = ["codebase_rag", "codec", "batch", "batch.command_executor", "batch.tests"]
 
 [project.optional-dependencies]
 test = [
@@ -109,11 +110,14 @@ markers = [
 
 [dependency-groups]
 dev = [
+    "anyio>=4.12.0",
     "bandit>=1.9.2",
     "coverage>=7.13.0",
     "pre-commit>=4.2.0",
     "pyinstaller>=6.14.1",
     "pylint>=4.0.4",
+    "pytest>=9.0.1",
+    "pytest-anyio>=0.0.0",
     "radon>=6.0.1",
     "ruff>=0.5.5",
     "semgrep>=1.79.0",
