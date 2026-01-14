@@ -32,3 +32,8 @@ test_output/
 !package.json
 !tsconfig.json
 !.claude-plugin/plugin.json
+
+# Temp files
+*.sqlite
+commands.jsonl
+results.jsonl
