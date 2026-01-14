@@ -203,14 +203,17 @@ def inspect(
 def generate_test(repo_path: Path, count: int) -> None:
     import json
     import random
+    import subprocess
 
     templates = [
         "ls -la",
         "ls -la .",
+        "ls -la {subdir}",
         "find . -name '*.py' -type f | head -10",
         "find . -name '*.js' -type f | head -10",
         "find . -type f -name '*.md' | wc -l",
         "find . -type f | wc -l",
+        "find {subdir} -type f | head -10",
         "grep -r 'def ' . --include='*.py' | head -20",
         "grep -r 'function' . --include='*.js' | head -20",
         "grep -r 'class ' . --include='*.py' | head -10",
@@ -231,9 +234,23 @@ def generate_test(repo_path: Path, count: int) -> None:
         "stat {file}",
     ]
 
+    subdirs: list[str] = []
+    result = subprocess.run(
+        ["find", str(repo_path), "-maxdepth", "2", "-type", "d"],
+        capture_output=True,
+        text=True,
+    )
+    for d in result.stdout.strip().split("\n"):
+        if d and not any(x in d for x in ["node_modules", ".git", "__pycache__", ".venv"]):
+            rel_path = Path(d).relative_to(repo_path)
+            if str(rel_path) != ".":
+                subdirs.append(str(rel_path))
+
+    if not subdirs:
+        subdirs = ["."]
+
     files: list[str] = []
     for ext in ["*.py", "*.js", "*.md", "*.txt", "*.json"]:
-        import subprocess
         result = subprocess.run(
             ["find", str(repo_path), "-name", ext, "-type", "f"],
             capture_output=True,
@@ -254,6 +271,8 @@ def generate_test(repo_path: Path, count: int) -> None:
         cmd = template
         if "{file}" in cmd:
             cmd = cmd.replace("{file}", random.choice(files))
+        if "{subdir}" in cmd:
+            cmd = cmd.replace("{subdir}", random.choice(subdirs))
 
         line = json.dumps({"cmd": cmd, "repo": str(repo_path)})
         click.echo(line)
