@@ -1,6 +1,7 @@
 import sys
 from collections import OrderedDict, defaultdict
 from collections.abc import Callable, ItemsView, KeysView
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from loguru import logger
@@ -23,8 +24,8 @@ from .types_defs import (
     TrieNode,
 )
 from .utils.dependencies import has_semantic_dependencies
+from .utils.file_enumerator import FileEnumerator
 from .utils.fqn_resolver import find_function_source_by_fqn
-from .utils.path_utils import should_skip_path
 from .utils.source_extraction import extract_source_with_fallback
 
 
@@ -118,7 +119,7 @@ class FunctionRegistryTrie:
                 if filter_fn is None or filter_fn(qn):
                     results.append((qn, func_type))
 
-            for key, child in n.items():
+            for key, child in sorted(n.items()):
                 if not key.startswith(cs.TRIE_INTERNAL_PREFIX):
                     assert isinstance(child, dict)
                     dfs(child)
@@ -160,6 +161,17 @@ class FunctionRegistryTrie:
 
 
 class BoundedASTCache:
+    """
+    LRU cache for AST nodes with memory and entry limits.
+
+    Uses incremental size tracking for O(1) memory checks instead of
+    O(N) sum on every insert. Size is recalibrated periodically to
+    correct for estimation drift.
+    """
+
+    # Recalibrate estimated size every N operations
+    _RECALIBRATE_INTERVAL = 100
+
     def __init__(
         self,
         max_entries: int | None = None,
@@ -174,11 +186,25 @@ class BoundedASTCache:
         )
         self.max_memory_bytes = max_mem * cs.BYTES_PER_MB
 
+        # Incremental size tracking for O(1) memory checks
+        self._estimated_size_bytes = 0
+        self._operations_since_recalibrate = 0
+
     def __setitem__(self, key: Path, value: tuple[Node, cs.SupportedLanguage]) -> None:
+        # Remove old entry if exists (and update size tracking)
         if key in self.cache:
+            old_value = self.cache[key]
+            self._estimated_size_bytes -= sys.getsizeof(old_value)
             del self.cache[key]
 
+        # Add new entry and update size tracking
         self.cache[key] = value
+        self._estimated_size_bytes += sys.getsizeof(value)
+        self._operations_since_recalibrate += 1
+
+        # Periodic recalibration to correct for estimation drift
+        if self._operations_since_recalibrate >= self._RECALIBRATE_INTERVAL:
+            self._recalibrate_size()
 
         self._enforce_limits()
 
@@ -189,6 +215,8 @@ class BoundedASTCache:
 
     def __delitem__(self, key: Path) -> None:
         if key in self.cache:
+            value = self.cache[key]
+            self._estimated_size_bytes -= sys.getsizeof(value)
             del self.cache[key]
 
     def __contains__(self, key: Path) -> bool:
@@ -197,9 +225,20 @@ class BoundedASTCache:
     def items(self) -> ItemsView[Path, tuple[Node, cs.SupportedLanguage]]:
         return self.cache.items()
 
+    def _recalibrate_size(self) -> None:
+        """Recalculate exact size to correct for estimation drift."""
+        try:
+            self._estimated_size_bytes = sum(
+                sys.getsizeof(v) for v in self.cache.values()
+            )
+        except Exception:
+            # If size calculation fails, estimate based on entry count
+            self._estimated_size_bytes = len(self.cache) * 1024  # ~1KB per entry
+        self._operations_since_recalibrate = 0
+
     def _enforce_limits(self) -> None:
         while len(self.cache) > self.max_entries:
-            self.cache.popitem(last=False)  # (H) Remove least recently used
+            self._pop_oldest()
 
         if self._should_evict_for_memory():
             entries_to_remove = max(
@@ -207,17 +246,17 @@ class BoundedASTCache:
             )
             for _ in range(entries_to_remove):
                 if self.cache:
-                    self.cache.popitem(last=False)
+                    self._pop_oldest()
+
+    def _pop_oldest(self) -> None:
+        """Remove oldest entry and update size tracking."""
+        if self.cache:
+            _, value = self.cache.popitem(last=False)
+            self._estimated_size_bytes -= sys.getsizeof(value)
 
     def _should_evict_for_memory(self) -> bool:
-        try:
-            cache_size = sum(sys.getsizeof(v) for v in self.cache.values())
-            return cache_size > self.max_memory_bytes
-        except Exception:
-            return (
-                len(self.cache)
-                > self.max_entries * settings.CACHE_MEMORY_THRESHOLD_RATIO
-            )
+        """Check if memory limit exceeded using O(1) estimated size."""
+        return self._estimated_size_bytes > self.max_memory_bytes
 
 
 class GraphUpdater:
@@ -243,6 +282,9 @@ class GraphUpdater:
         self.include_paths = include_paths
         self.exclude_paths = exclude_paths
 
+        # Single-pass file enumeration for efficiency
+        self.file_enumerator = FileEnumerator(repo_path)
+
         self.factory = ProcessorFactory(
             ingestor=self.ingestor,
             repo_path=self.repo_path,
@@ -267,8 +309,16 @@ class GraphUpdater:
         )
         logger.info(ls.ENSURING_PROJECT.format(name=self.project_name))
 
+        # Single-pass enumeration for both structure and file processing
+        self.file_enumerator.enumerate(
+            exclude_paths=self.exclude_paths,
+            include_paths=self.include_paths,
+        )
+
         logger.info(ls.PASS_1_STRUCTURE)
-        self.factory.structure_processor.identify_structure()
+        self.factory.structure_processor.identify_structure(
+            directories=self.file_enumerator.directories
+        )
 
         logger.info(ls.PASS_2_FILES)
         self._process_files()
@@ -309,7 +359,7 @@ class GraphUpdater:
         if qns_to_remove:
             logger.debug(ls.REMOVING_QNS.format(count=len(qns_to_remove)))
 
-        for simple_name, qn_set in self.simple_name_lookup.items():
+        for simple_name, qn_set in sorted(self.simple_name_lookup.items()):
             original_count = len(qn_set)
             new_qn_set = qn_set - qns_to_remove
             if len(new_qn_set) < original_count:
@@ -317,41 +367,139 @@ class GraphUpdater:
                 logger.debug(ls.CLEANED_SIMPLE_NAME.format(name=simple_name))
 
     def _process_files(self) -> None:
-        for filepath in self.repo_path.rglob("*"):
-            if filepath.is_file() and not should_skip_path(
-                filepath,
-                self.repo_path,
-                exclude_paths=self.exclude_paths,
-                include_paths=self.include_paths,
-            ):
-                lang_config = get_language_spec(filepath.suffix)
-                if (
-                    lang_config
-                    and isinstance(lang_config.language, cs.SupportedLanguage)
-                    and lang_config.language in self.parsers
-                ):
-                    result = self.factory.definition_processor.process_file(
-                        filepath,
-                        lang_config.language,
-                        self.queries,
-                        self.factory.structure_processor.structural_elements,
-                    )
-                    if result:
-                        root_node, language = result
-                        self.ast_cache[filepath] = (root_node, language)
-                elif self._is_dependency_file(filepath.name, filepath):
-                    self.factory.definition_processor.process_dependencies(filepath)
+        """
+        Process all files in the repository.
 
+        Uses a two-phase approach for parallelization:
+        1. Parse files in parallel (tree-sitter releases GIL)
+        2. Process parsed ASTs sequentially (state updates)
+        """
+        # Categorize files
+        parseable_files: list[tuple[Path, cs.SupportedLanguage]] = []
+        dependency_files: list[Path] = []
+
+        for filepath in self.file_enumerator.files:
+            lang_config = get_language_spec(filepath.suffix)
+            if (
+                lang_config
+                and isinstance(lang_config.language, cs.SupportedLanguage)
+                and lang_config.language in self.parsers
+            ):
+                parseable_files.append((filepath, lang_config.language))
+            elif self._is_dependency_file(filepath.name, filepath):
+                dependency_files.append(filepath)
+
+        # Phase 1: Parse files in parallel (tree-sitter releases GIL)
+        parse_results: dict[Path, tuple[Node, bytes]] = {}
+        num_workers = getattr(settings, "FILE_PARSE_THREADS", 4)
+
+        with ThreadPoolExecutor(max_workers=num_workers) as executor:
+            future_to_file = {
+                executor.submit(self._parse_file_only, fp, lang): (fp, lang)
+                for fp, lang in parseable_files
+            }
+            for future in as_completed(future_to_file):
+                filepath, _ = future_to_file[future]
+                try:
+                    result = future.result()
+                    if result:
+                        parse_results[filepath] = result
+                except Exception as e:
+                    logger.error(ls.PARSE_WORKER_FAILED.format(path=filepath, error=e))
+
+        # Phase 2: Process parsed ASTs sequentially (state updates)
+        for filepath, language in parseable_files:
+            if filepath in parse_results:
+                root_node, source_bytes = parse_results[filepath]
+                result = self.factory.definition_processor.process_file(
+                    filepath,
+                    language,
+                    self.queries,
+                    self.factory.structure_processor.structural_elements,
+                    pre_parsed=(root_node, source_bytes),
+                )
+                if result:
+                    ast_node, lang = result
+                    self.ast_cache[filepath] = (ast_node, lang)
+
+            self.factory.structure_processor.process_generic_file(
+                filepath, filepath.name
+            )
+
+        # Process dependency files
+        for filepath in dependency_files:
+            self.factory.definition_processor.process_dependencies(filepath)
+            self.factory.structure_processor.process_generic_file(
+                filepath, filepath.name
+            )
+
+        # Process remaining non-parseable files (other generic files)
+        parseable_paths = {fp for fp, _ in parseable_files}
+        dep_paths = set(dependency_files)
+        for filepath in self.file_enumerator.files:
+            if filepath not in parseable_paths and filepath not in dep_paths:
                 self.factory.structure_processor.process_generic_file(
                     filepath, filepath.name
                 )
 
+    def _parse_file_only(
+        self, filepath: Path, language: cs.SupportedLanguage
+    ) -> tuple[Node, bytes] | None:
+        """
+        Parse a file without updating any state. Thread-safe.
+
+        This method only performs I/O and tree-sitter parsing, both of which
+        release the GIL and can run in parallel.
+
+        Args:
+            filepath: Path to the file to parse
+            language: The language of the file
+
+        Returns:
+            Tuple of (root_node, source_bytes) if successful, None otherwise
+        """
+        try:
+            source_bytes = filepath.read_bytes()
+            lang_queries = self.queries[language]
+            parser = lang_queries.get(cs.KEY_PARSER)
+            if not parser:
+                return None
+            tree = parser.parse(source_bytes)
+            return (tree.root_node, source_bytes)
+        except Exception as e:
+            logger.error(ls.PARSE_WORKER_FAILED.format(path=filepath, error=e))
+            return None
+
     def _process_function_calls(self) -> None:
-        ast_cache_items = list(self.ast_cache.items())
-        for file_path, (root_node, language) in ast_cache_items:
+        """
+        Process function calls for all cached ASTs.
+
+        Uses parallel processing when multiple files are cached, as the
+        ingestor is now thread-safe and tree-sitter queries release the GIL.
+        """
+        ast_cache_items = sorted(self.ast_cache.items(), key=lambda x: str(x[0]))
+
+        if len(ast_cache_items) <= 1:
+            # Single file - no benefit from parallelism
+            for file_path, (root_node, language) in ast_cache_items:
+                self.factory.call_processor.process_calls_in_file(
+                    file_path, root_node, language, self.queries
+                )
+            return
+
+        # Process multiple files in parallel
+        num_workers = getattr(settings, "CALL_RESOLUTION_THREADS", 2)
+
+        def process_file_calls(
+            item: tuple[Path, tuple[Node, cs.SupportedLanguage]]
+        ) -> None:
+            file_path, (root_node, language) = item
             self.factory.call_processor.process_calls_in_file(
                 file_path, root_node, language, self.queries
             )
+
+        with ThreadPoolExecutor(max_workers=num_workers) as executor:
+            list(executor.map(process_file_calls, ast_cache_items))
 
     def _generate_semantic_embeddings(self) -> None:
         if not has_semantic_dependencies():
