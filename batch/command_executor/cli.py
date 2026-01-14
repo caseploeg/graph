@@ -226,6 +226,8 @@ def generate_test(repo_path: Path, count: int) -> None:
         "git ls-files | wc -l",
         "git rev-parse HEAD",
         "git show --stat HEAD",
+        "git diff --stat",
+        "git diff HEAD~1 --stat",
         "wc -l {file}",
         "head -20 {file}",
         "tail -20 {file}",
