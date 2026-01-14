@@ -96,10 +96,7 @@ def run(
             output_handle.flush()
 
         if dashboard:
-            dashboard.update(
-                success=(result.return_code == 0),
-                cached=result.cached,
-            )
+            dashboard.update_result(result)
         elif results_written % 1000 == 0:
             click.echo(f"Processed {results_written:,} commands...", err=True)
 
