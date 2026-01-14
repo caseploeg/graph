@@ -96,10 +96,7 @@ def run(
             output_handle.flush()
 
         if dashboard:
-            dashboard.update(
-                success=(result.return_code == 0),
-                cached=result.cached,
-            )
+            dashboard.update_result(result)
         elif results_written % 1000 == 0:
             click.echo(f"Processed {results_written:,} commands...", err=True)
 
@@ -206,21 +203,23 @@ def generate_test(repo_path: Path, count: int) -> None:
 
     templates = [
         "ls -la",
-        "ls -la {subdir}",
+        "ls -la .",
         "find . -name '*.py' -type f | head -10",
         "find . -name '*.js' -type f | head -10",
         "find . -type f -name '*.md' | wc -l",
+        "find . -type f | wc -l",
         "grep -r 'def ' . --include='*.py' | head -20",
         "grep -r 'function' . --include='*.js' | head -20",
         "grep -r 'class ' . --include='*.py' | head -10",
         "grep -r 'import' . --include='*.py' | wc -l",
+        "grep -r 'TODO' . | head -10",
         "git status",
         "git log --oneline -10",
         "git branch -a",
-        "git diff --stat HEAD~1",
         "git ls-files | head -20",
         "git ls-files | wc -l",
         "git rev-parse HEAD",
+        "git show --stat HEAD",
         "wc -l {file}",
         "head -20 {file}",
         "tail -20 {file}",
@@ -228,8 +227,6 @@ def generate_test(repo_path: Path, count: int) -> None:
         "file {file}",
         "stat {file}",
     ]
-
-    subdirs = [".", "src", "lib", "tests", "docs"]
 
     files: list[str] = []
     for ext in ["*.py", "*.js", "*.md", "*.txt", "*.json"]:
@@ -246,13 +243,12 @@ def generate_test(repo_path: Path, count: int) -> None:
         files.extend(found[:50])
 
     if not files:
-        files = ["."]
+        click.echo("Warning: No files found, using repo root", err=True)
+        files = [str(repo_path)]
 
     for _ in range(count):
         template = random.choice(templates)
         cmd = template
-        if "{subdir}" in cmd:
-            cmd = cmd.replace("{subdir}", random.choice(subdirs))
         if "{file}" in cmd:
             cmd = cmd.replace("{file}", random.choice(files))
 
