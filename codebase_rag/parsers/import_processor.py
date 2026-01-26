@@ -57,6 +57,20 @@ class ImportProcessor:
     def get_stdlib_cache_stats() -> StdlibCacheStats:
         return get_stdlib_cache_stats()
 
+    def _is_external_import(
+        self, module_path: str, language: cs.SupportedLanguage
+    ) -> bool:
+        normalized_path = module_path
+
+        if language == cs.SupportedLanguage.GO:
+            normalized_path = module_path.replace(cs.SEPARATOR_SLASH, cs.SEPARATOR_DOT)
+        elif language in (cs.SupportedLanguage.RUST, cs.SupportedLanguage.CPP):
+            normalized_path = module_path.replace(
+                cs.SEPARATOR_DOUBLE_COLON, cs.SEPARATOR_DOT
+            )
+
+        return not normalized_path.startswith(self.project_name + cs.SEPARATOR_DOT)
+
     def parse_imports(
         self,
         root_node: Node,
@@ -103,10 +117,26 @@ class ImportProcessor:
             )
 
             if self.ingestor:
+                external_modules_created = 0
                 for local_name, full_name in self.import_mapping[module_qn].items():
                     module_path = self.stdlib_extractor.extract_module_path(
                         full_name, language
                     )
+
+                    is_external = self._is_external_import(module_path, language)
+
+                    if is_external:
+                        self.ingestor.ensure_node_batch(
+                            cs.NodeLabel.MODULE,
+                            {
+                                cs.KEY_QUALIFIED_NAME: module_path,
+                                cs.KEY_NAME: module_path.split(cs.SEPARATOR_DOT)[-1],
+                            },
+                        )
+                        external_modules_created += 1
+                        logger.debug(
+                            ls.IMP_CREATED_EXTERNAL_NODE.format(module_path=module_path)
+                        )
 
                     self.ingestor.ensure_relationship_batch(
                         (
@@ -126,6 +156,13 @@ class ImportProcessor:
                             from_module=module_qn,
                             to_module=module_path,
                             full_name=full_name,
+                        )
+                    )
+
+                if external_modules_created > 0:
+                    logger.debug(
+                        ls.IMP_EXTERNAL_IMPORT_COUNT.format(
+                            count=external_modules_created
                         )
                     )
 
